@@ -103,14 +103,87 @@ def load_class_names(file) -> list:
 # =========================
 # Barra lateral (modelo y opciones)
 # =========================
+# =========================
+# Barra lateral (modelo y opciones)
+# =========================
 st.sidebar.header("Modelo y opciones")
 
-mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"])
+import urllib.request
+
+def _fetch_bytes(url: str, bearer_token: str | None = None) -> bytes:
+    req = urllib.request.Request(url)
+    if bearer_token:
+        req.add_header("Authorization", f"Bearer {bearer_token}")
+    with urllib.request.urlopen(req) as resp:
+        return resp.read()
+
+src = st.sidebar.radio(
+    "Origen del modelo",
+    ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)"],
+    index=0
+)
+
+mfile = None
+model = None
+model_bytes = None
+model_name = None
+err_loading = None
+
+try:
+    if src == "Subir archivo":
+        mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"])
+        if mfile is not None:
+            model_bytes = mfile.read()
+            model_name = mfile.name
+
+    elif src == "URL directa":
+        url = st.sidebar.text_input("URL del modelo (.keras/.h5/.zip)", placeholder="https://...")
+        token = st.sidebar.text_input("Token (opcional, si el recurso es privado)", type="password")
+        if url:
+            model_bytes = _fetch_bytes(url, bearer_token=token if token else None)
+            model_name = os.path.basename(url.split("?")[0])
+
+    elif src == "GitHub Release (público)":
+        gh_user = st.sidebar.text_input("Usuario/Org", placeholder="miusuario")
+        gh_repo = st.sidebar.text_input("Repositorio", placeholder="wbc-streamlit")
+        gh_tag  = st.sidebar.text_input("Tag de release", placeholder="v1.0.0")
+        gh_asset = st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras")
+        if gh_user and gh_repo and gh_tag and gh_asset:
+            url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
+            st.sidebar.caption(f"URL generada: {url}")
+            model_bytes = _fetch_bytes(url)
+            model_name = gh_asset
+
+    elif src == "Ruta local (servidor)":
+        local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/path/a/modelo.keras")
+        if local_path and os.path.exists(local_path):
+            with open(local_path, "rb") as f:
+                model_bytes = f.read()
+            model_name = os.path.basename(local_path)
+        elif local_path:
+            st.sidebar.warning("La ruta indicada no existe en este entorno.")
+
+    # Carga si hay bytes y nombre
+    if model_bytes and model_name:
+        try:
+            model = load_model_from_bytes(model_bytes, model_name)
+            st.sidebar.success(f"Modelo cargado: {model_name}")
+        except Exception as e:
+            err_loading = str(e)
+
+except Exception as e:
+    err_loading = str(e)
+
+if err_loading:
+    st.sidebar.error(f"Error al cargar el modelo: {err_loading}")
+
+# Etiquetas y demás opciones
 labels_file = st.sidebar.file_uploader("Etiquetas (.txt o .json)", type=["txt", "json"])
 pp_mode = st.sidebar.selectbox("Preprocesamiento", ["1/255", "EfficientNet", "VGG/ResNet (caffe)", "Sin normalizar"])
 threshold = st.sidebar.slider("Umbral de confianza para 'detectar'", 0.0, 0.99, 0.0, 0.01)
 topk = st.sidebar.slider("Top-K a mostrar", 1, 10, 5, 1)
 show_shapes = st.sidebar.checkbox("Mostrar shapes y depuración", value=True)
+
 
 # =========================
 # Carga de modelo
