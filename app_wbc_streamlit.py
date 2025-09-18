@@ -134,7 +134,29 @@ src = st.sidebar.radio(
     ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)"],
     index=2
 )
+#########################################
+# Githube realease público
+#########################################
+elif src == "GitHub Release (público)":
+    gh_user = st.sidebar.text_input("Usuario/Org", placeholder="miusuario")
+    gh_repo = st.sidebar.text_input("Repositorio", placeholder="wbc_streamlit")
+    gh_tag  = st.sidebar.text_input("Tag de release", placeholder="v1.0.0")
+    gh_asset = st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras")
 
+    url = None
+    if gh_user and gh_repo and gh_tag and gh_asset:
+        url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
+        st.sidebar.caption(f"URL generada: {url}")
+
+    # >>> AÑADE ESTAS DOS LÍNEAS <<<
+    cargar = st.sidebar.button("Cargar ahora", use_container_width=True)
+    if url and cargar:
+        model_bytes, fetch_info = _fetch_bytes(url)  # usa la función con cabeceras
+        model_name = gh_asset
+
+
+
+#########################################
 mfile = None
 model = None
 model_bytes = None
