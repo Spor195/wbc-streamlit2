@@ -100,47 +100,60 @@ def load_class_names(file) -> list:
     except Exception:
         return []
 
+
 # =========================
-# Barra lateral (modelo y opciones)
-# =========================
-# =========================
-# Barra lateral (modelo y opciones)
+# Barra lateral (modelo y opciones) — versión con depuración
 # =========================
 st.sidebar.header("Modelo y opciones")
 
-import urllib.request
+import urllib.request, urllib.error
 
-def _fetch_bytes(url: str, bearer_token: str | None = None) -> bytes:
+def _fetch_bytes(url: str, bearer_token: str | None = None) -> tuple[bytes, dict]:
     req = urllib.request.Request(url)
+    # Cabeceras que ayudan con GitHub Releases
+    req.add_header("User-Agent", "streamlit-wbc/1.0")
+    req.add_header("Accept", "application/octet-stream")
     if bearer_token:
         req.add_header("Authorization", f"Bearer {bearer_token}")
-    with urllib.request.urlopen(req) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req) as resp:
+            data = resp.read()
+            info = {
+                "status": resp.status if hasattr(resp, "status") else 200,
+                "final_url": resp.geturl(),
+                "length": len(data)
+            }
+            return data, info
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"HTTPError {e.code}: {e.reason}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"URLError: {e.reason}")
 
 src = st.sidebar.radio(
     "Origen del modelo",
     ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)"],
-    index=0
+    index=2
 )
 
 mfile = None
 model = None
 model_bytes = None
 model_name = None
+fetch_info = None
 err_loading = None
 
 try:
     if src == "Subir archivo":
         mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"])
-        if mfile is not None:
+        if mfile is not None and st.sidebar.button("Cargar ahora"):
             model_bytes = mfile.read()
             model_name = mfile.name
 
     elif src == "URL directa":
         url = st.sidebar.text_input("URL del modelo (.keras/.h5/.zip)", placeholder="https://...")
-        token = st.sidebar.text_input("Token (opcional, si el recurso es privado)", type="password")
-        if url:
-            model_bytes = _fetch_bytes(url, bearer_token=token if token else None)
+        token = st.sidebar.text_input("Token (opcional)", type="password")
+        if url and st.sidebar.button("Cargar ahora"):
+            model_bytes, fetch_info = _fetch_bytes(url, bearer_token=token or None)
             model_name = os.path.basename(url.split("?")[0])
 
     elif src == "GitHub Release (público)":
@@ -148,28 +161,37 @@ try:
         gh_repo = st.sidebar.text_input("Repositorio", placeholder="wbc-streamlit")
         gh_tag  = st.sidebar.text_input("Tag de release", placeholder="v1.0.0")
         gh_asset = st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras")
+        url = None
         if gh_user and gh_repo and gh_tag and gh_asset:
             url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
             st.sidebar.caption(f"URL generada: {url}")
-            model_bytes = _fetch_bytes(url)
+        if url and st.sidebar.button("Cargar ahora"):
+            model_bytes, fetch_info = _fetch_bytes(url)
             model_name = gh_asset
 
     elif src == "Ruta local (servidor)":
         local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/path/a/modelo.keras")
-        if local_path and os.path.exists(local_path):
-            with open(local_path, "rb") as f:
-                model_bytes = f.read()
-            model_name = os.path.basename(local_path)
-        elif local_path:
-            st.sidebar.warning("La ruta indicada no existe en este entorno.")
+        if local_path and st.sidebar.button("Cargar ahora"):
+            if os.path.exists(local_path):
+                with open(local_path, "rb") as f:
+                    model_bytes = f.read()
+                model_name = os.path.basename(local_path)
+            else:
+                st.sidebar.warning("La ruta indicada no existe en este entorno.")
 
-    # Carga si hay bytes y nombre
+    # Informes de descarga
+    if fetch_info:
+        st.sidebar.info(f"Descarga OK · HTTP {fetch_info.get('status')} · bytes: {fetch_info.get('length'):,}")
+        st.sidebar.caption(f"URL final: {fetch_info.get('final_url')}")
+
+    # Carga del modelo si hay bytes
     if model_bytes and model_name:
         try:
             model = load_model_from_bytes(model_bytes, model_name)
             st.sidebar.success(f"Modelo cargado: {model_name}")
+            st.session_state["_model_loaded_ok"] = True
         except Exception as e:
-            err_loading = str(e)
+            err_loading = f"{e}"
 
 except Exception as e:
     err_loading = str(e)
@@ -177,7 +199,7 @@ except Exception as e:
 if err_loading:
     st.sidebar.error(f"Error al cargar el modelo: {err_loading}")
 
-# Etiquetas y demás opciones
+# Etiquetas y opciones
 labels_file = st.sidebar.file_uploader("Etiquetas (.txt o .json)", type=["txt", "json"])
 pp_mode = st.sidebar.selectbox("Preprocesamiento", ["1/255", "EfficientNet", "VGG/ResNet (caffe)", "Sin normalizar"])
 threshold = st.sidebar.slider("Umbral de confianza para 'detectar'", 0.0, 0.99, 0.0, 0.01)
