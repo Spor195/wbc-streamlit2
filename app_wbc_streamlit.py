@@ -1,68 +1,87 @@
 # app_wbc_streamlit.py
 # ------------------------------------------------------
-# Clasificador de leucocitos con carga de modelo flexible
-# (c) Sabino – versión con botón "Cargar ahora" y depuración
+# Clasificador de leucocitos (Streamlit)
+# Carga de modelo flexible: archivo, URL directa, GitHub Release (API), ruta local
+# Robusto para assets grandes (.keras/.h5 o SavedModel.zip)
 # ------------------------------------------------------
 
 import os, io, json, zipfile, tempfile
-import urllib.request, urllib.error
 import numpy as np
 from PIL import Image
 import streamlit as st
 
-# Intento perezoso de TF (si no está instalado, se informa claramente)
+# =========================
+# TensorFlow (carga perezosa)
+# =========================
 try:
     import tensorflow as tf
 except Exception as e:
     st.error(f"No se pudo importar TensorFlow: {e}")
     st.stop()
 
-# ------------------------------------------------------
+# =========================
 # Configuración de página
-# ------------------------------------------------------
+# =========================
 st.set_page_config(page_title="Clasificación de leucocitos", layout="centered")
 st.title("Clasificación de leucocitos")
 st.caption("Sube tu modelo y una imagen. Ajusta el preprocesamiento hasta reproducir tu entrenamiento.")
 
-# ------------------------------------------------------
-# Utilidades
-# ------------------------------------------------------
-def _fetch_bytes(url: str, bearer_token: str | None = None) -> tuple[bytes, dict]:
-    """Descarga bytes de una URL con cabeceras adecuadas (útil para GitHub Releases)."""
-    req = urllib.request.Request(url)
+# =========================
+# Utilidades generales
+# =========================
+import urllib.request as _urlreq
+import urllib.error as _urlerr
+
+def _fetch_to_path(url: str, bearer_token: str | None = None) -> tuple[str, dict]:
+    """
+    Descarga en streaming a archivo temporal y devuelve (ruta, info).
+    Robusto para archivos grandes. Usa cabeceras adecuadas (GitHub).
+    """
+    req = _urlreq.Request(url)
     req.add_header("User-Agent", "streamlit-wbc/1.0")
+    # Si el asset es público, Accept octet-stream funciona bien; si no, se ignora.
     req.add_header("Accept", "application/octet-stream")
     if bearer_token:
         req.add_header("Authorization", f"Bearer {bearer_token}")
-    with urllib.request.urlopen(req) as resp:
-        data = resp.read()
-        info = {
-            "status": getattr(resp, "status", 200),
-            "final_url": resp.geturl(),
-            "length": len(data),
-        }
-        return data, info
+
+    tmpdir = tempfile.mkdtemp(prefix="wbc_dl_")
+    fname = os.path.basename(url.split("?")[0]) or "model.bin"
+    fpath = os.path.join(tmpdir, fname)
+
+    total = 0
+    try:
+        with _urlreq.urlopen(req) as resp, open(fpath, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)  # 1 MB
+                if not chunk:
+                    break
+                out.write(chunk)
+                total += len(chunk)
+            info = {
+                "status": getattr(resp, "status", 200),
+                "final_url": resp.geturl(),
+                "length": total,
+            }
+        return fpath, info
+    except _urlerr.HTTPError as e:
+        raise RuntimeError(f"HTTPError {e.code}: {e.reason}")
+    except _urlerr.URLError as e:
+        raise RuntimeError(f"URLError: {e.reason}")
 
 @st.cache_resource(show_spinner=False)
-def load_model_from_bytes(model_bytes: bytes, filename: str):
-    """Carga .keras/.h5 o SavedModel.zip desde bytes a un dir temporal."""
-    suffix = os.path.splitext(filename)[1].lower()
-    tmpdir = tempfile.mkdtemp(prefix="wbc_model_")
-
-    if suffix in (".keras", ".h5"):
-        path = os.path.join(tmpdir, filename)
-        with open(path, "wb") as f:
-            f.write(model_bytes)
-        model = tf.keras.models.load_model(path)
-        return model
-
-    if suffix == ".zip":
-        zpath = os.path.join(tmpdir, filename)
-        with open(zpath, "wb") as f:
-            f.write(model_bytes)
-        with zipfile.ZipFile(zpath, "r") as zf:
+def load_model_from_path(path: str):
+    """
+    Carga un modelo desde ruta:
+    - .keras / .h5 -> load_model directo
+    - .zip (SavedModel) -> descomprime y busca saved_model.pb
+    """
+    low = path.lower()
+    if low.endswith((".keras", ".h5")):
+        return tf.keras.models.load_model(path)
+    if low.endswith(".zip"):
+        tmpdir = tempfile.mkdtemp(prefix="wbc_sm_")
+        with zipfile.ZipFile(path, "r") as zf:
             zf.extractall(tmpdir)
-        # buscar carpeta con saved_model.pb
         sm_dir = None
         for root, _, files in os.walk(tmpdir):
             if "saved_model.pb" in files:
@@ -70,10 +89,8 @@ def load_model_from_bytes(model_bytes: bytes, filename: str):
                 break
         if sm_dir is None:
             raise ValueError("El ZIP no contiene un SavedModel válido (falta saved_model.pb).")
-        model = tf.keras.models.load_model(sm_dir)
-        return model
-
-    raise ValueError("Formato de modelo no soportado. Usa .keras, .h5 o SavedModel .zip.")
+        return tf.keras.models.load_model(sm_dir)
+    raise ValueError("Extensión no soportada. Usa .keras, .h5 o SavedModel .zip.")
 
 def infer_target_size(model):
     ishape = getattr(model, "input_shape", None)
@@ -84,7 +101,6 @@ def infer_target_size(model):
     return (224, 224), 3
 
 def preprocess_image(img: Image.Image, size=(224, 224), mode="1/255", channels=3):
-    # asegurar canales
     img = img.convert("RGB") if channels == 3 else img.convert("L")
     img = img.resize(size, Image.BILINEAR)
     x = np.array(img).astype("float32")
@@ -108,7 +124,6 @@ def preprocess_image(img: Image.Image, size=(224, 224), mode="1/255", channels=3
     return x
 
 def load_class_names(file) -> list:
-    """Lee etiquetas desde .txt (una por línea) o .json (lista)."""
     name = file.name.lower()
     data = file.read()
     try:
@@ -120,9 +135,36 @@ def load_class_names(file) -> list:
     except Exception:
         return []
 
-# ------------------------------------------------------
+# =========================
+# Utilidades API GitHub
+# =========================
+import json as _json
+
+def _github_api_json(url: str, token: str | None = None) -> dict:
+    req = _urlreq.Request(url)
+    req.add_header("User-Agent", "streamlit-wbc/1.0")
+    req.add_header("Accept", "application/vnd.github+json")
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    with _urlreq.urlopen(req) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None) -> str:
+    """
+    Devuelve la browser_download_url exacta del asset (nombre exacto) en la release {tag}.
+    """
+    meta = _github_api_json(
+        f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}",
+        token=token
+    )
+    for a in meta.get("assets", []):
+        if a.get("name") == asset_name:
+            return a.get("browser_download_url")
+    raise RuntimeError(f"Asset '{asset_name}' no se encontró en la release '{tag}'.")
+
+# ======================================================
 # Barra lateral — Modelo y opciones
-# ------------------------------------------------------
+# ======================================================
 st.sidebar.header("Modelo y opciones")
 
 src = st.sidebar.radio(
@@ -133,177 +175,112 @@ src = st.sidebar.radio(
 
 mfile = None
 model = None
-model_bytes = None
-model_name = None
+model_path = None
 fetch_info = None
 err_loading = None
 
 try:
+    # ---------- Subir archivo ----------
     if src == "Subir archivo":
-        mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"])
-        if mfile is not None and st.sidebar.button("Cargar ahora", use_container_width=True):
-            model_bytes = mfile.read()
-            model_name = mfile.name
+        mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"], key="up_model")
+        if mfile is not None and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_upload"):
+            # Guardar a disco y cargar desde ruta (evita picos de RAM)
+            tmpdir = tempfile.mkdtemp(prefix="wbc_up_")
+            model_path = os.path.join(tmpdir, mfile.name)
+            with open(model_path, "wb") as f:
+                f.write(mfile.read())
+            model = load_model_from_path(model_path)
+            fetch_info = {"status": 200, "final_url": "archivo_subido", "length": os.path.getsize(model_path)}
 
+    # ---------- URL directa ----------
     elif src == "URL directa":
-        url = st.sidebar.text_input("URL del modelo (.keras/.h5/.zip)", placeholder="https://...")
-        token = st.sidebar.text_input("Token (opcional si es privado)", type="password")
-        if url and st.sidebar.button("Cargar ahora", use_container_width=True):
-            model_bytes, fetch_info = _fetch_bytes(url, bearer_token=token or None)
-            model_name = os.path.basename(url.split("?")[0])
+        url_direct = st.sidebar.text_input("URL del modelo (.keras/.h5/.zip)", placeholder="https://...", key="url_direct").strip()
+        token_direct = st.sidebar.text_input("Token (opcional si es privado)", type="password", key="tok_direct").strip()
+        if url_direct and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_direct"):
+            model_path, fetch_info = _fetch_to_path(url_direct, bearer_token=token_direct or None)
+            model = load_model_from_path(model_path)
 
+    # ---------- GitHub Release (público) ----------
     elif src == "GitHub Release (público)":
-        # Parámetros por defecto (editables si quieres)
         gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
         gh_repo  = st.sidebar.text_input("Repositorio", value="wbc_streamlit2", key="gh_repo").strip()
         gh_tag   = st.sidebar.text_input("Tag de release", value="v1.0.0", key="gh_tag").strip()
         gh_asset = st.sidebar.text_input("Nombre del asset", value="modelo_final.keras", key="gh_asset").strip()
-        gh_token = st.sidebar.text_input("Token (opcional, si fuese privado o por rate limit)", type="password", key="gh_tok").strip()
+        gh_token = st.sidebar.text_input("Token (opcional: privado o rate limit)", type="password", key="gh_tok").strip()
 
-        # --- Utilidades específicas para GitHub API ---
-    import json, urllib.request, urllib.error
+        # Vista de URL "de campos" (diagnóstico)
+        built_url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
+        st.sidebar.caption("URL construida (exacta):")
+        st.sidebar.code(repr(built_url), language="text")
 
-    def _github_api_json(url: str, token: str | None = None) -> dict:
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", "streamlit-wbc/1.0")
-        req.add_header("Accept", "application/vnd.github+json")
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        # 1) Botón recomendado: resolver por API (evita 404 por espacios/typos)
+        if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api_release"):
+            try:
+                dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
+                st.sidebar.caption("URL resuelta por API (exacta):")
+                st.sidebar.code(repr(dl_url), language="text")
+                model_path, fetch_info = _fetch_to_path(dl_url, bearer_token=gh_token or None)
+                model = load_model_from_path(model_path)
+            except Exception as e:
+                err_loading = f"No se pudo resolver/descargar el asset: {e}"
 
-    def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None) -> str:
-        # 1) Busca el release por tag
-        meta = _github_api_json(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", token=token)
-        # 2) Encuentra el asset por nombre exacto
-        for a in meta.get("assets", []):
-            if a.get("name") == asset_name:
-                return a.get("browser_download_url")
-        raise RuntimeError(f"Asset '{asset_name}' no se encontró en la release '{tag}'.")
+        st.sidebar.divider()
 
-    # Botón: resolver URL vía API y descargar
-    if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api"):
-        try:
-            dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
-            st.sidebar.caption("URL resuelta por API (exacta):")
-            st.sidebar.code(repr(dl_url), language="text")
-            # Descarga con cabeceras adecuadas
-            model_bytes, fetch_info = _fetch_bytes(dl_url, bearer_token=gh_token or None)
-            model_name = gh_asset
-        except Exception as e:
-            st.sidebar.error(f"No se pudo resolver/descargar el asset: {e}")
+        # 2) Botón directo fijo a tu release (por si prefieres forzar sin API)
+        if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed_release"):
+            try:
+                fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+                model_path, fetch_info = _fetch_to_path(fixed_url, bearer_token=gh_token or None)
+                model = load_model_from_path(model_path)
+            except Exception as e:
+                err_loading = f"Descarga directa falló: {e}"
 
-    st.sidebar.divider()
+        st.sidebar.divider()
 
-    # Botón directo a TU release (por si prefieres forzar sin API)
-    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
-        try:
-            fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
-            model_bytes, fetch_info = _fetch_bytes(fixed_url, bearer_token=gh_token or None)
-            model_name = "modelo_final.keras"
-        except Exception as e:
-            st.sidebar.error(f"Descarga directa falló: {e}")
+        # 3) Botón “Cargar ahora” usando exactamente lo escrito en los campos
+        if st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_load_from_fields"):
+            try:
+                model_path, fetch_info = _fetch_to_path(built_url, bearer_token=gh_token or None)
+                model = load_model_from_path(model_path)
+            except Exception as e:
+                err_loading = f"Descarga por URL construida falló: {e}"
 
-    # --- Utilidades específicas para GitHub API ---
-    import json, urllib.request, urllib.error
-
-    def _github_api_json(url: str, token: str | None = None) -> dict:
-        req = urllib.request.Request(url)
-        req.add_header("User-Agent", "streamlit-wbc/1.0")
-        req.add_header("Accept", "application/vnd.github+json")
-        if token:
-            req.add_header("Authorization", f"Bearer {token}")
-        with urllib.request.urlopen(req) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-
-    def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None) -> str:
-        # 1) Busca el release por tag
-        meta = _github_api_json(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", token=token)
-        # 2) Encuentra el asset por nombre exacto
-        for a in meta.get("assets", []):
-            if a.get("name") == asset_name:
-                return a.get("browser_download_url")
-        raise RuntimeError(f"Asset '{asset_name}' no se encontró en la release '{tag}'.")
-
-    # Botón: resolver URL vía API y descargar
-    if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api"):
-        try:
-            dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
-            st.sidebar.caption("URL resuelta por API (exacta):")
-            st.sidebar.code(repr(dl_url), language="text")
-            # Descarga con cabeceras adecuadas
-            model_bytes, fetch_info = _fetch_bytes(dl_url, bearer_token=gh_token or None)
-            model_name = gh_asset
-        except Exception as e:
-            st.sidebar.error(f"No se pudo resolver/descargar el asset: {e}")
-
-    st.sidebar.divider()
-
-    # Botón directo a TU release (por si prefieres forzar sin API)
-    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
-        try:
-            fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
-            model_bytes, fetch_info = _fetch_bytes(fixed_url, bearer_token=gh_token or None)
-            model_name = "modelo_final.keras"
-        except Exception as e:
-            st.sidebar.error(f"Descarga directa falló: {e}")
-
-
-    # Botón normal (usa lo que escribas en los campos)
-    if url and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_load_release"):
-        model_bytes, fetch_info = _fetch_bytes(url)
-        model_name = gh_asset
-
-    st.sidebar.divider()
-
-    # Botón directo a TU release (sin escribir/pegar nada)
-    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
-        fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
-        model_bytes, fetch_info = _fetch_bytes(fixed_url)
-        model_name = "modelo_final.keras"
-
-
+    # ---------- Ruta local ----------
     elif src == "Ruta local (servidor)":
-        local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/ruta/a/modelo.keras")
-        if local_path and st.sidebar.button("Cargar ahora", use_container_width=True):
+        local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/ruta/a/modelo.keras", key="local_path").strip()
+        if local_path and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_local"):
             if os.path.exists(local_path):
-                with open(local_path, "rb") as f:
-                    model_bytes = f.read()
-                model_name = os.path.basename(local_path)
+                model = load_model_from_path(local_path)
+                model_path = local_path
+                fetch_info = {"status": 200, "final_url": local_path, "length": os.path.getsize(local_path)}
             else:
-                st.sidebar.warning("La ruta indicada no existe en este entorno.")
-
-    # Informes de descarga (si aplican)
-    if fetch_info:
-        st.sidebar.info(f"Descarga OK · HTTP {fetch_info.get('status')} · bytes: {fetch_info.get('length'):,}")
-        st.sidebar.caption(f"URL final: {fetch_info.get('final_url')}")
-
-    # Cargar modelo si tenemos bytes y nombre
-    if model_bytes and model_name:
-        try:
-            model = load_model_from_bytes(model_bytes, model_name)
-            st.sidebar.success(f"Modelo cargado: {model_name}")
-            st.session_state["_model_loaded_ok"] = True
-        except Exception as e:
-            err_loading = f"{e}"
+                err_loading = "La ruta indicada no existe en este entorno."
 
 except Exception as e:
     err_loading = str(e)
 
+# Informe de descarga/carga
+if fetch_info:
+    st.sidebar.info(f"Descarga OK · HTTP {fetch_info.get('status')} · bytes: {fetch_info.get('length'):,}")
+    st.sidebar.caption(f"URL final: {fetch_info.get('final_url')}")
 if err_loading:
     st.sidebar.error(f"Error al cargar el modelo: {err_loading}")
+elif model is not None:
+    st.sidebar.success("Modelo cargado correctamente.")
 
+# =========================
 # Resto de opciones
-labels_file = st.sidebar.file_uploader("Etiquetas (.txt o .json)", type=["txt", "json"])
-pp_mode = st.sidebar.selectbox("Preprocesamiento", ["1/255", "EfficientNet", "VGG/ResNet (caffe)", "Sin normalizar"])
-threshold = st.sidebar.slider("Umbral de confianza para 'detectar'", 0.0, 0.99, 0.0, 0.01)
-topk = st.sidebar.slider("Top-K a mostrar", 1, 10, 5, 1)
-show_shapes = st.sidebar.checkbox("Mostrar shapes y depuración", value=True)
+# =========================
+labels_file = st.sidebar.file_uploader("Etiquetas (.txt o .json)", type=["txt", "json"], key="labels_up")
+pp_mode = st.sidebar.selectbox("Preprocesamiento", ["1/255", "EfficientNet", "VGG/ResNet (caffe)", "Sin normalizar"], key="pp_mode")
+threshold = st.sidebar.slider("Umbral de confianza para 'detectar'", 0.0, 0.99, 0.0, 0.01, key="thr")
+topk = st.sidebar.slider("Top-K a mostrar", 1, 10, 5, 1, key="topk")
+show_shapes = st.sidebar.checkbox("Mostrar shapes y depuración", value=True, key="dbg")
 
-# ------------------------------------------------------
+# ======================================================
 # Área principal — Imagen e inferencia
-# ------------------------------------------------------
-img_file = st.file_uploader("Imagen de leucocito (JPG/PNG)", type=["jpg", "jpeg", "png"])
+# ======================================================
+img_file = st.file_uploader("Imagen de leucocito (JPG/PNG)", type=["jpg", "jpeg", "png"], key="img_up")
 
 class_names = []
 if labels_file is not None:
@@ -333,7 +310,7 @@ if model is not None:
                 st.warning(f"Salida con forma inusual: {preds.shape}. Se tomará argmax del último eje.")
                 preds = preds.reshape(-1)
 
-            # Convertir a probabilidades (softmax) si no parecen ya normalizadas
+            # Normalización a probabilidades si son logits
             if np.any(preds < 0) or np.sum(preds) <= 0.99 or np.sum(preds) >= 1.01:
                 try:
                     from scipy.special import softmax
