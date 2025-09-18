@@ -208,42 +208,64 @@ try:
         gh_asset = st.sidebar.text_input("Nombre del asset", value="modelo_final.keras", key="gh_asset").strip()
         gh_token = st.sidebar.text_input("Token (opcional: privado o rate limit)", type="password", key="gh_tok").strip()
 
-        # Vista de URL "de campos" (diagnóstico)
         built_url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
         st.sidebar.caption("URL construida (exacta):")
         st.sidebar.code(repr(built_url), language="text")
 
-        # 1) Botón recomendado: resolver por API (evita 404 por espacios/typos)
-        if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api_release"):
+    # ---- descarga robusta: usa Accept */* y muestra URL final ----
+    def _fetch_to_path_any(url: str, bearer_token: str | None = None) -> tuple[str, dict]:
+        import urllib.request as _rq, urllib.error as _er
+        req = _rq.Request(url)
+        req.add_header("User-Agent", "streamlit-wbc/1.0")
+        req.add_header("Accept", "*/*")  # <- más permisivo que octet-stream para algunos mirrors
+        if bearer_token:
+            req.add_header("Authorization", f"Bearer {bearer_token}")
+        tmpdir = tempfile.mkdtemp(prefix="wbc_dl_")
+        fpath = os.path.join(tmpdir, os.path.basename(url.split("?")[0]) or "model.bin")
+        total = 0
+        with _rq.urlopen(req) as resp, open(fpath, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk: break
+                out.write(chunk); total += len(chunk)
+            info = {"status": getattr(resp, "status", 200), "final_url": resp.geturl(), "length": total}
+        return fpath, info
+
+    # ---- flujo con cadena de fallbacks ----
+    if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_api_chain"):
+        try:
+            # 1) Resolver URL exacta del asset por API
+            dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
+            st.sidebar.caption("URL resuelta por API (exacta):")
+            st.sidebar.code(repr(dl_url), language="text")
+
+            # 2) Intento principal
             try:
-                dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
-                st.sidebar.caption("URL resuelta por API (exacta):")
-                st.sidebar.code(repr(dl_url), language="text")
-                model_path, fetch_info = _fetch_to_path(dl_url, bearer_token=gh_token or None)
+                model_path, fetch_info = _fetch_to_path_any(dl_url, bearer_token=gh_token or None)
                 model = load_model_from_path(model_path)
-            except Exception as e:
-                err_loading = f"No se pudo resolver/descargar el asset: {e}"
+            except Exception as e1:
+                # 3) Fallback directo fijo (solo si coincide con tus valores)
+                try:
+                    fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+                    model_path, fetch_info = _fetch_to_path_any(fixed_url, bearer_token=gh_token or None)
+                    model = load_model_from_path(model_path)
+                except Exception as e2:
+                    # 4) Último intento: URL construida por los campos
+                    model_path, fetch_info = _fetch_to_path_any(built_url, bearer_token=gh_token or None)
+                    model = load_model_from_path(model_path)
 
-        st.sidebar.divider()
+        except Exception as e:
+            st.sidebar.error(f"No se pudo resolver/descargar el asset: {e}")
 
-        # 2) Botón directo fijo a tu release (por si prefieres forzar sin API)
-        if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed_release"):
-            try:
-                fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
-                model_path, fetch_info = _fetch_to_path(fixed_url, bearer_token=gh_token or None)
-                model = load_model_from_path(model_path)
-            except Exception as e:
-                err_loading = f"Descarga directa falló: {e}"
+    st.sidebar.divider()
 
-        st.sidebar.divider()
-
-        # 3) Botón “Cargar ahora” usando exactamente lo escrito en los campos
-        if st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_load_from_fields"):
-            try:
-                model_path, fetch_info = _fetch_to_path(built_url, bearer_token=gh_token or None)
-                model = load_model_from_path(model_path)
-            except Exception as e:
-                err_loading = f"Descarga por URL construida falló: {e}"
+    # Botón directo (si quieres forzar manualmente la URL de los campos)
+    if st.sidebar.button("Cargar ahora (usar URL de campos)", use_container_width=True, key="btn_load_fields_only"):
+        try:
+            model_path, fetch_info = _fetch_to_path_any(built_url, bearer_token=gh_token or None)
+            model = load_model_from_path(model_path)
+        except Exception as e:
+            st.sidebar.error(f"Descarga por URL construida falló: {e}")
 
     # ---------- Ruta local ----------
     elif src == "Ruta local (servidor)":
