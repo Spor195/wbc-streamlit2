@@ -152,18 +152,102 @@ try:
             model_bytes, fetch_info = _fetch_bytes(url, bearer_token=token or None)
             model_name = os.path.basename(url.split("?")[0])
 
-    elif src == "GitHub Release (público)":
-        # Campos editables (con .strip() para evitar espacios invisibles)
-        gh_user  = (st.sidebar.text_input("Usuario/Org", placeholder="miusuario", key="gh_user") or "").strip()
-        gh_repo  = (st.sidebar.text_input("Repositorio", placeholder="wbc_streamlit", key="gh_repo") or "").strip()
-        gh_tag   = (st.sidebar.text_input("Tag de release", placeholder="v1.0.0", key="gh_tag") or "").strip()
-        gh_asset = (st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras", key="gh_asset") or "").strip()
+   elif src == "GitHub Release (público)":
+    # Parámetros por defecto (editables si quieres)
+    gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
+    gh_repo  = st.sidebar.text_input("Repositorio", value="wbc_streamlit2", key="gh_repo").strip()
+    gh_tag   = st.sidebar.text_input("Tag de release", value="v1.0.0", key="gh_tag").strip()
+    gh_asset = st.sidebar.text_input("Nombre del asset", value="modelo_final.keras", key="gh_asset").strip()
+    gh_token = st.sidebar.text_input("Token (opcional, si fuese privado o por rate limit)", type="password", key="gh_tok").strip()
 
-        url = None
-        if gh_user and gh_repo and gh_tag and gh_asset:
-            url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
-            st.sidebar.caption("URL generada (exacta):")
-            st.sidebar.code(repr(url), language="text")  # muestra comillas para detectar espacios ocultos
+    # --- Utilidades específicas para GitHub API ---
+    import json, urllib.request, urllib.error
+
+    def _github_api_json(url: str, token: str | None = None) -> dict:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "streamlit-wbc/1.0")
+        req.add_header("Accept", "application/vnd.github+json")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None) -> str:
+        # 1) Busca el release por tag
+        meta = _github_api_json(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", token=token)
+        # 2) Encuentra el asset por nombre exacto
+        for a in meta.get("assets", []):
+            if a.get("name") == asset_name:
+                return a.get("browser_download_url")
+        raise RuntimeError(f"Asset '{asset_name}' no se encontró en la release '{tag}'.")
+
+    # Botón: resolver URL vía API y descargar
+    if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api"):
+        try:
+            dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
+            st.sidebar.caption("URL resuelta por API (exacta):")
+            st.sidebar.code(repr(dl_url), language="text")
+            # Descarga con cabeceras adecuadas
+            model_bytes, fetch_info = _fetch_bytes(dl_url, bearer_token=gh_token or None)
+            model_name = gh_asset
+        except Exception as e:
+            st.sidebar.error(f"No se pudo resolver/descargar el asset: {e}")
+
+    st.sidebar.divider()
+
+    # Botón directo a TU release (por si prefieres forzar sin API)
+    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
+        try:
+            fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+            model_bytes, fetch_info = _fetch_bytes(fixed_url, bearer_token=gh_token or None)
+            model_name = "modelo_final.keras"
+        except Exception as e:
+            st.sidebar.error(f"Descarga directa falló: {e}")
+
+    # --- Utilidades específicas para GitHub API ---
+    import json, urllib.request, urllib.error
+
+    def _github_api_json(url: str, token: str | None = None) -> dict:
+        req = urllib.request.Request(url)
+        req.add_header("User-Agent", "streamlit-wbc/1.0")
+        req.add_header("Accept", "application/vnd.github+json")
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(req) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None) -> str:
+        # 1) Busca el release por tag
+        meta = _github_api_json(f"https://api.github.com/repos/{user}/{repo}/releases/tags/{tag}", token=token)
+        # 2) Encuentra el asset por nombre exacto
+        for a in meta.get("assets", []):
+            if a.get("name") == asset_name:
+                return a.get("browser_download_url")
+        raise RuntimeError(f"Asset '{asset_name}' no se encontró en la release '{tag}'.")
+
+    # Botón: resolver URL vía API y descargar
+    if st.sidebar.button("Cargar desde Release (API)", use_container_width=True, key="btn_load_via_api"):
+        try:
+            dl_url = _resolve_release_asset_download_url(gh_user, gh_repo, gh_tag, gh_asset, token=gh_token or None)
+            st.sidebar.caption("URL resuelta por API (exacta):")
+            st.sidebar.code(repr(dl_url), language="text")
+            # Descarga con cabeceras adecuadas
+            model_bytes, fetch_info = _fetch_bytes(dl_url, bearer_token=gh_token or None)
+            model_name = gh_asset
+        except Exception as e:
+            st.sidebar.error(f"No se pudo resolver/descargar el asset: {e}")
+
+    st.sidebar.divider()
+
+    # Botón directo a TU release (por si prefieres forzar sin API)
+    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
+        try:
+            fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+            model_bytes, fetch_info = _fetch_bytes(fixed_url, bearer_token=gh_token or None)
+            model_name = "modelo_final.keras"
+        except Exception as e:
+            st.sidebar.error(f"Descarga directa falló: {e}")
+
 
     # Botón normal (usa lo que escribas en los campos)
     if url and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_load_release"):
