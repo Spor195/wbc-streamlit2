@@ -152,15 +152,15 @@ try:
             model_bytes, fetch_info = _fetch_bytes(url, bearer_token=token or None)
             model_name = os.path.basename(url.split("?")[0])
 
-   elif src == "GitHub Release (público)":
-       # Parámetros por defecto (editables si quieres)
-       gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
-       gh_repo  = st.sidebar.text_input("Repositorio", value="wbc_streamlit2", key="gh_repo").strip()
-       gh_tag   = st.sidebar.text_input("Tag de release", value="v1.0.0", key="gh_tag").strip()
-       gh_asset = st.sidebar.text_input("Nombre del asset", value="modelo_final.keras", key="gh_asset").strip()
-       gh_token = st.sidebar.text_input("Token (opcional, si fuese privado o por rate limit)", type="password", key="gh_tok").strip()
+    elif src == "GitHub Release (público)":
+        # Parámetros por defecto (editables si quieres)
+        gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
+        gh_repo  = st.sidebar.text_input("Repositorio", value="wbc_streamlit2", key="gh_repo").strip()
+        gh_tag   = st.sidebar.text_input("Tag de release", value="v1.0.0", key="gh_tag").strip()
+        gh_asset = st.sidebar.text_input("Nombre del asset", value="modelo_final.keras", key="gh_asset").strip()
+        gh_token = st.sidebar.text_input("Token (opcional, si fuese privado o por rate limit)", type="password", key="gh_tok").strip()
 
-       # --- Utilidades específicas para GitHub API ---
+        # --- Utilidades específicas para GitHub API ---
     import json, urllib.request, urllib.error
 
     def _github_api_json(url: str, token: str | None = None) -> dict:
