@@ -153,17 +153,31 @@ try:
             model_name = os.path.basename(url.split("?")[0])
 
     elif src == "GitHub Release (público)":
-        gh_user = st.sidebar.text_input("Usuario/Org", placeholder="miusuario")
-        gh_repo = st.sidebar.text_input("Repositorio", placeholder="wbc_streamlit")
-        gh_tag  = st.sidebar.text_input("Tag de release", placeholder="v1.0.0")
-        gh_asset = st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras")
-        url = None
-        if gh_user and gh_repo and gh_tag and gh_asset:
-            url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
-            st.sidebar.caption(f"URL generada: {url}")
-        if url and st.sidebar.button("Cargar ahora", use_container_width=True):
-            model_bytes, fetch_info = _fetch_bytes(url)
-            model_name = gh_asset
+    # Campos editables (con .strip() para evitar espacios invisibles)
+    gh_user  = (st.sidebar.text_input("Usuario/Org", placeholder="miusuario", key="gh_user") or "").strip()
+    gh_repo  = (st.sidebar.text_input("Repositorio", placeholder="wbc_streamlit", key="gh_repo") or "").strip()
+    gh_tag   = (st.sidebar.text_input("Tag de release", placeholder="v1.0.0", key="gh_tag") or "").strip()
+    gh_asset = (st.sidebar.text_input("Nombre del asset", placeholder="modelo.keras", key="gh_asset") or "").strip()
+
+    url = None
+    if gh_user and gh_repo and gh_tag and gh_asset:
+        url = f"https://github.com/{gh_user}/{gh_repo}/releases/download/{gh_tag}/{gh_asset}"
+        st.sidebar.caption("URL generada (exacta):")
+        st.sidebar.code(repr(url), language="text")  # muestra comillas para detectar espacios ocultos
+
+    # Botón normal (usa lo que escribas en los campos)
+    if url and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_load_release"):
+        model_bytes, fetch_info = _fetch_bytes(url)
+        model_name = gh_asset
+
+    st.sidebar.divider()
+
+    # Botón directo a TU release (sin escribir/pegar nada)
+    if st.sidebar.button("Cargar mi release (Spor195 / v1.0.0)", use_container_width=True, key="btn_load_fixed"):
+        fixed_url = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+        model_bytes, fetch_info = _fetch_bytes(fixed_url)
+        model_name = "modelo_final.keras"
+
 
     elif src == "Ruta local (servidor)":
         local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/ruta/a/modelo.keras")
