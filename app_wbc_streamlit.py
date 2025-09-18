@@ -1,253 +1,251 @@
-# app_wbc_streamlit.py
-# ------------------------------------------------------------
-# Clasificador de leucocitos (WBC) con un modelo ya entrenado
-# Publicar con:  streamlit run app_wbc_streamlit.py
-# ------------------------------------------------------------
-import io
-import os
-import zipfile
-import tempfile
+# ==========================================
+# Clasificador de leucocitos (WBC) - Streamlit
+# ==========================================
+# Compat: TensorFlow/Keras modelo .keras o SavedModel empaquetado
+# Autor: Sabino + asistente de docencia
+# ------------------------------------------
+
+import os, io, json, hashlib, zipfile, requests
 from pathlib import Path
+from typing import List, Tuple, Optional
 
 import numpy as np
-from PIL import Image, ImageOps
-
+from PIL import Image
 import streamlit as st
-
-# TensorFlow / Keras
 import tensorflow as tf
-from tensorflow.keras.models import load_model
 
-st.set_page_config(page_title="Clasificador de leucocitos (WBC)", layout="centered")
+# ==============================
+# Configuración general
+# ==============================
+st.set_page_config(page_title="Clasificador WBC", layout="wide")
+MODEL_DIR = Path("models"); MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------
-# Utilidades
-# ---------------------------
-def center_square_crop(pil_img: Image.Image) -> Image.Image:
-    w, h = pil_img.size
-    s = min(w, h)
-    left = (w - s) // 2
-    top = (h - s) // 2
-    return pil_img.crop((left, top, left + s, top + s))
+# ==============================
+# Utilidades de descarga/caché
+# ==============================
+def _sha256sum(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()
 
-def preprocess_image(pil_img: Image.Image, img_size: int, to_rgb: bool = True, rescale_255: bool = True):
-    """Recorte cuadrado centrado, resize y normalización simple (x/255)."""
-    if pil_img.mode not in ("RGB", "RGBA", "L", "I;16"):
-        pil_img = pil_img.convert("RGB")
-    if to_rgb and pil_img.mode != "RGB":
-        pil_img = pil_img.convert("RGB")
-    img = center_square_crop(pil_img)
-    img = img.resize((img_size, img_size), Image.BICUBIC)
-    arr = np.array(img).astype("float32")
+def _download_with_progress(url: str, dst: Path, chunk=1 << 20):
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    total = int(r.headers.get("content-length", 0))
+    prog = st.progress(0, text=f"Descargando modelo desde {url} …")
+    written = 0
+    with open(dst, "wb") as f:
+        for data in r.iter_content(chunk_size=chunk):
+            f.write(data)
+            written += len(data)
+            if total:
+                prog.progress(min(written / total, 1.0))
+    prog.empty()
+
+@st.cache_resource(show_spinner=False)
+def load_model_from_local(path: Path) -> tf.keras.Model:
+    # Carga .keras / .h5 / SavedModel directory
+    if path.suffix in [".keras", ".h5", ".hdf5"]:
+        return tf.keras.models.load_model(path)
+    # SavedModel descomprimido (carpeta con saved_model.pb)
+    if (path / "saved_model.pb").exists():
+        return tf.keras.models.load_model(path)
+    # SavedModel .zip -> descomprimir y cargar
+    if path.suffix == ".zip":
+        target_dir = MODEL_DIR / (path.stem + "_extracted")
+        if not target_dir.exists():
+            with zipfile.ZipFile(path, "r") as z:
+                z.extractall(target_dir)
+        return tf.keras.models.load_model(target_dir)
+    # Fallback
+    raise ValueError(f"Formato no soportado en: {path}")
+
+@st.cache_resource(show_spinner=False)
+def ensure_model_by_url(url: str, expected_sha256: str = "") -> tf.keras.Model:
+    filename = url.split("/")[-1] or "modelo.bin"
+    local_path = MODEL_DIR / filename
+    if not local_path.exists():
+        _download_with_progress(url, local_path)
+    if expected_sha256:
+        calc = _sha256sum(local_path)
+        if calc != expected_sha256.lower():
+            raise ValueError(
+                f"SHA256 no coincide.\nEsperado: {expected_sha256}\nCalculado: {calc}"
+            )
+    return load_model_from_local(local_path)
+
+# ==============================
+# Gestión de etiquetas
+# ==============================
+def parse_labels_text(raw: str) -> List[str]:
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+@st.cache_data(show_spinner=False)
+def load_labels_from_json_bytes(b: bytes) -> List[str]:
+    data = json.loads(b.decode("utf-8"))
+    # Admite {"labels":[...]} o lista simple
+    if isinstance(data, dict) and "labels" in data:
+        return [str(x) for x in data["labels"]]
+    if isinstance(data, list):
+        return [str(x) for x in data]
+    raise ValueError("Formato de labels.json no reconocido.")
+
+# ==============================
+# Preprocesamiento de imagen
+# ==============================
+def preprocess_image(img: Image.Image, target_size: Tuple[int, int],
+                     rescale_255: bool = True, center_crop: bool = False) -> np.ndarray:
+    """Devuelve un tensor (1, H, W, 3) float32."""
+    img = img.convert("RGB")
+    if center_crop:
+        # recorte cuadrado central
+        w, h = img.size
+        s = min(w, h)
+        left = (w - s) // 2
+        top = (h - s) // 2
+        img = img.crop((left, top, left + s, top + s))
+    img = img.resize(target_size, Image.BILINEAR)
+    x = np.asarray(img).astype("float32")
     if rescale_255:
-        arr = arr / 255.0
-    arr = np.expand_dims(arr, axis=0)
-    return arr
+        x = x / 255.0
+    x = np.expand_dims(x, axis=0)
+    return x
 
-def save_uploaded_to_tmp(uploaded, suffix=""):
-    """Guarda un archivo subido en un archivo temporal y retorna la ruta."""
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp.write(uploaded.read())
-    tmp.flush()
-    tmp.close()
-    return tmp.name
+def softmax(x: np.ndarray) -> np.ndarray:
+    e = np.exp(x - np.max(x, axis=-1, keepdims=True))
+    return e / np.sum(e, axis=-1, keepdims=True)
 
-def try_load_savedmodel_from_zip(zip_path: str):
-    """Intenta extraer un SavedModel .zip y retorna el directorio extraído."""
-    dest_dir = tempfile.mkdtemp(prefix="savedmodel_")
-    with zipfile.ZipFile(zip_path, 'r') as zf:
-        zf.extractall(dest_dir)
-    # buscar carpeta con saved_model.pb
-    for root, dirs, files in os.walk(dest_dir):
-        if "saved_model.pb" in files:
-            return root
-    return None
-
-def load_keras_model(uploaded_file):
-    """Carga .keras/.h5 o SavedModel (zip)."""
-    if uploaded_file is None:
-        return None, "Cargue su modelo (.keras/.h5) o SavedModel (.zip)."
-    name = uploaded_file.name.lower()
-    if name.endswith((".keras", ".h5", ".hdf5")):
-        path = save_uploaded_to_tmp(uploaded_file, suffix=os.path.splitext(name)[1])
-        model = load_model(path, compile=False)
-        return model, f"Modelo Keras cargado desde: {Path(path).name}"
-    elif name.endswith(".zip"):
-        path = save_uploaded_to_tmp(uploaded_file, suffix=".zip")
-        savedmodel_dir = try_load_savedmodel_from_zip(path)
-        if savedmodel_dir is None:
-            return None, "No se encontró 'saved_model.pb' dentro del zip."
-        model = tf.keras.models.load_model(savedmodel_dir, compile=False)
-        return model, f"SavedModel cargado desde carpeta: {savedmodel_dir}"
-    else:
-        return None, "Formato no soportado. Use .keras, .h5 o un SavedModel .zip."
-
-def load_labels(uploaded_json, manual_text):
-    """Lee etiquetas desde JSON o desde un cuadro de texto (una por línea)."""
-    if uploaded_json is not None:
-        try:
-            labels = list(json.loads(uploaded_json.read()))
-            return labels, "Etiquetas cargadas desde JSON."
-        except Exception as e:
-            return None, f"Error al leer JSON: {e}"
-    # si no hay JSON, usar manual
-    manual_text = manual_text.strip()
-    if manual_text:
-        labels = [line.strip() for line in manual_text.splitlines() if line.strip()]
-        return labels, "Etiquetas cargadas desde el listado manual."
-    return None, "Defina las etiquetas (JSON o listado)."
-
-def softmax_if_needed(x):
-    """Si la última capa no es softmax, aplica softmax para probabilidades legibles."""
-    if x.ndim == 2 and x.shape[0] == 1:
-        x = x[0]
-    # Intentar detectar si ya es softmax (suma ~1 y >=0)
-    if np.all(x >= -1e-6) and np.isclose(np.sum(x), 1.0, atol=1e-3):
-        return x
-    ex = np.exp(x - np.max(x))
-    return ex / np.sum(ex)
-
-def grad_cam(input_img, model, last_conv_name=None, class_index=None):
-    """
-    Grad-CAM genérico. Puede fallar según arquitectura; se maneja con try/except en UI.
-    Devuelve un heatmap en formato PIL.Image del mismo tamaño que input_img.
-    """
-    # inferir última conv si no se provee nombre
-    if last_conv_name is None:
-        # Heurística: último layer con 4D output
-        for layer in reversed(model.layers):
-            try:
-                if len(layer.output.shape) == 4:
-                    last_conv_name = layer.name
-                    break
-            except Exception:
-                continue
-    if last_conv_name is None:
-        raise RuntimeError("No se halló una capa convolucional válida.")
-    conv_layer = model.get_layer(last_conv_name)
-
-    # Preparar gradiente
-    img_arr = np.array(input_img.resize(model.input_shape[1:3], Image.BICUBIC)).astype("float32") / 255.0
-    img_arr = np.expand_dims(img_arr, 0)
-
-    grad_model = tf.keras.models.Model([model.inputs], [conv_layer.output, model.output])
-    with tf.GradientTape() as tape:
-        conv_outputs, predictions = grad_model(img_arr)
-        if class_index is None:
-            class_index = int(np.argmax(predictions[0]))
-        loss = predictions[:, class_index]
-    grads = tape.gradient(loss, conv_outputs)
-    pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2))
-
-    conv_outputs = conv_outputs[0].numpy()
-    pooled_grads = pooled_grads.numpy()
-
-    for i in range(conv_outputs.shape[-1]):
-        conv_outputs[:, :, i] *= pooled_grads[i]
-
-    heatmap = np.mean(conv_outputs, axis=-1)
-    heatmap = np.maximum(heatmap, 0)
-    if np.max(heatmap) == 0:
-        heatmap = np.zeros_like(heatmap)
-    else:
-        heatmap /= np.max(heatmap)
-
-    # Redimensionar al tamaño de la imagen original
-    heatmap_img = Image.fromarray(np.uint8(255 * heatmap)).resize(input_img.size, Image.BICUBIC).convert("L")
-    return heatmap_img
-
-def overlay_heatmap_on_image(pil_img, heatmap_img, alpha=0.35):
-    heatmap_rgb = ImageOps.colorize(heatmap_img, black="black", white="red")
-    return Image.blend(pil_img.convert("RGB"), heatmap_rgb.convert("RGB"), alpha=alpha)
-
-# ---------------------------
-# Barra lateral (config)
-# ---------------------------
-st.sidebar.header("Configuración del modelo")
-uploaded_model = st.sidebar.file_uploader("Modelo (.keras / .h5) o SavedModel (.zip)", type=["keras", "h5", "hdf5", "zip"])
-
-with st.sidebar.expander("Etiquetas de clases", expanded=True):
-    uploaded_labels = st.file_uploader("labels.json (opcional)", type=["json"], key="labels_json")
-    manual_labels = st.text_area("O pegue un listado (una etiqueta por línea):", value="Neutrófilo\nLinfocito\nMonocito\nEosinófilo\nBasófilo")
-
-with st.sidebar.expander("Preprocesamiento", expanded=True):
-    img_size = st.slider("Tamaño de entrada (px)", 64, 512, 224, step=16)
-    rescale = st.checkbox("Dividir por 255 (normalización simple)", value=True)
-    show_gradcam = st.checkbox("Generar Grad‑CAM (experimental)", value=False)
-
-# ---------------------------
-# Título
-# ---------------------------
+# ==============================
+# UI
+# ==============================
 st.title("Clasificador de leucocitos (WBC)")
+st.caption("Docencia e investigación")
 
-st.markdown("""
-Cargue su **modelo entrenado** y una **imagen de un leucocito** para obtener la predicción.
-- Modelos soportados: **Keras** (`.keras`, `.h5`) o **SavedModel** comprimido (`.zip`).
-- Defina las **etiquetas** en `labels.json` (lista JSON) o manualmente.
-""")
+with st.sidebar:
+    st.subheader("Configuración del modelo")
+    load_mode = st.radio(
+        "Fuente del modelo",
+        ["Subir archivo (≤200 MB)", "URL directa / GitHub Release"],
+        index=1
+    )
 
-# Cargar modelo
-model, model_msg = load_keras_model(uploaded_model) if uploaded_model else (None, "Modelo aún no cargado.")
-st.info(model_msg)
+    model: Optional[tf.keras.Model] = None
+    model_ready = False
+    model_info = {}
 
-# Etiquetas
-labels, labels_msg = load_labels(uploaded_labels, manual_labels)
-if labels is None:
-    st.warning(labels_msg)
-else:
-    st.success(labels_msg + f"  ({len(labels)} clases)")
-
-# ---------------------------
-# Carga de imagen y predicción
-# ---------------------------
-uploaded_image = st.file_uploader("Imagen del leucocito (JPG/PNG)", type=["jpg", "jpeg", "png"])
-
-if uploaded_image is not None:
-    pil_img = Image.open(uploaded_image).convert("RGB")
-    st.image(pil_img, caption="Imagen cargada", use_container_width=True)
-
-    if model is not None and labels is not None:
-        # Preprocesar
-        arr = preprocess_image(pil_img, img_size=img_size, to_rgb=True, rescale_255=rescale)
-
-        # Predicción
-        preds = model.predict(arr, verbose=0)
-        probs = softmax_if_needed(preds)
-        if probs.ndim == 2:
-            probs = probs[0]
-        # Ajustar etiquetas si dimensiones no coinciden
-        if len(labels) != probs.shape[-1]:
-            st.error(f"El modelo devuelve {probs.shape[-1]} salidas, pero hay {len(labels)} etiquetas.")
-        else:
-            top_idx = int(np.argmax(probs))
-            top_label = labels[top_idx]
-            top_prob = float(probs[top_idx])
-
-            st.subheader("Diagnóstico")
-            st.write(f"**{top_label}** (probabilidad estimada: **{top_prob:.3f}**)")
-
-            # Top‑k tabla
-            k = min(5, len(labels))
-            order = np.argsort(probs)[::-1][:k]
-            st.markdown("**Top‑5**")
-            st.dataframe({
-                "Clase": [labels[i] for i in order],
-                "Probabilidad": [float(probs[i]) for i in order]
-            })
-
-            # Grad‑CAM (opcional)
-            if show_gradcam:
-                try:
-                    heat = grad_cam(pil_img, model, last_conv_name=None, class_index=top_idx)
-                    overlay = overlay_heatmap_on_image(pil_img, heat, alpha=0.35)
-                    st.markdown("**Grad‑CAM (regiones de contribución):**")
-                    st.image(overlay, use_container_width=True)
-                except Exception as e:
-                    st.warning(f"No fue posible generar Grad‑CAM: {e}")
+    if load_mode == "Subir archivo (≤200 MB)":
+        up = st.file_uploader(
+            "Selecciona .keras / .h5 / SavedModel .zip",
+            type=["keras", "h5", "hdf5", "zip"],
+            accept_multiple_files=False
+        )
+        if up:
+            tmp_path = MODEL_DIR / up.name
+            with open(tmp_path, "wb") as f:
+                f.write(up.read())
+            with st.spinner("Cargando modelo…"):
+                model = load_model_from_local(tmp_path)
+                model_ready = True
     else:
-        st.info("Cargue el modelo y las etiquetas para habilitar la predicción.")
+        st.markdown("**GitHub Release (recomendado para >200 MB)**")
+        owner = st.text_input("Owner", value="tu_usuario")
+        repo = st.text_input("Repo", value="tu_repo")
+        tag = st.text_input("Tag (release)", value="v1.0.0")
+        asset = st.text_input("Nombre del asset", value="modelo_final.keras")
+        expected = st.text_input("SHA-256 (opcional)", value="")
+        url_default = f"https://github.com/{owner}/{repo}/releases/download/{tag}/{asset}"
+        url = st.text_input("URL del modelo", value=url_default)
+        if st.button("Descargar y cargar modelo"):
+            with st.spinner("Descargando y cargando…"):
+                model = ensure_model_by_url(url, expected_sha256=expected.strip())
+                model_ready = True
+        st.caption("También puedes pegar cualquier URL directa (S3/HF/Drive export=download).")
 
-# ---------------------------
-# Pie de página
-# ---------------------------
+    st.divider()
+    st.subheader("Etiquetas de clase")
+    labels_source = st.radio("Origen de etiquetas", ["Manual", "labels.json"])
+    labels: List[str] = []
+    if labels_source == "labels.json":
+        lj = st.file_uploader("Sube labels.json", type=["json"], accept_multiple_files=False)
+        if lj:
+            try:
+                labels = load_labels_from_json_bytes(lj.read())
+                st.success(f"{len(labels)} etiquetas cargadas.")
+            except Exception as e:
+                st.error(f"Error en labels.json: {e}")
+    else:
+        default_labels = "Neutrófilo,Eosinófilo,Basófilo,Linfocito,Monocito"
+        raw = st.text_input("Listado separado por comas", value=default_labels)
+        labels = parse_labels_text(raw)
+
+    st.divider()
+    st.subheader("Preprocesamiento")
+    rescale = st.checkbox("Dividir por 255", value=True)
+    center_crop = st.checkbox("Recorte central cuadrado", value=True)
+
+# Panel principal
+colA, colB = st.columns([1, 1.2])
+
+with colA:
+    st.markdown("### Imagen del leucocito")
+    image_file = st.file_uploader("Arrastra una imagen (JPG/PNG)", type=["jpg", "jpeg", "png"])
+    img: Optional[Image.Image] = None
+    if image_file:
+        img = Image.open(io.BytesIO(image_file.read()))
+        st.image(img, caption="Imagen cargada", use_container_width=True)
+
+with colB:
+    st.markdown("### Predicción")
+    if model_ready:
+        # Inferir tamaño de entrada (H, W) del primer tensor
+        try:
+            # Typical Keras: model.inputs[0].shape = (None, H, W, C)
+            in_shape = model.inputs[0].shape
+            H = int(in_shape[1]); W = int(in_shape[2])
+            C = int(in_shape[3]) if len(in_shape) > 3 and in_shape[3] is not None else 3
+        except Exception:
+            # Fallback razonable
+            H, W, C = 224, 224, 3
+        st.info(f"Tamaño de entrada del modelo: {(H, W, C)}")
+
+        if img is not None and labels:
+            x = preprocess_image(img, (W, H), rescale_255=rescale, center_crop=center_crop)
+            with st.spinner("Calculando predicción…"):
+                preds = model.predict(x, verbose=0)
+            # Asegurar vector 1D
+            if preds.ndim == 2 and preds.shape[0] == 1:
+                preds = preds[0]
+            # Si la salida no es softmax, aplicar para mostrar probabilidades
+            if np.any(preds < 0) or not np.isclose(np.sum(preds), 1.0, atol=1e-3):
+                probs = softmax(preds)
+            else:
+                probs = preds
+
+            # Alinear etiquetas
+            n_classes = len(labels)
+            if len(probs) != n_classes:
+                st.warning(
+                    f"El modelo devuelve {len(probs)} logits, pero hay {n_classes} etiquetas. "
+                    "Verifica el orden/longitud de labels."
+                )
+            m = min(len(probs), n_classes)
+            pairs = list(zip(labels[:m], probs[:m].tolist()))
+            pairs.sort(key=lambda t: t[1], reverse=True)
+
+            st.success(f"**Predicción top-1:** {pairs[0][0]}  "
+                       f"({pairs[0][1]*100:.1f}%)" if pairs else "Sin predicción.")
+            st.markdown("**Top-5**")
+            for name, p in pairs[:5]:
+                st.write(f"- {name}: {p*100:.2f}%")
+
+        elif img is None:
+            st.info("Carga una imagen para predecir.")
+        else:
+            st.info("Configura las etiquetas antes de predecir.")
+    else:
+        st.info("Carga el modelo en la barra lateral.")
+
+# Pie
 st.caption("© 2025 — Clasificador WBC para docencia e investigación.")
