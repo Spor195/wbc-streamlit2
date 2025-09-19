@@ -276,15 +276,15 @@ try:
 
 
 
-    ###### AÑADIDO ELIF
+     ###### AÑADIDO ELIF
     elif src == "Google Drive (ID)":
-    gdid = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="1AbCDeFGhijk_LMNOP", key="gdrive_id").strip()
-    if gdid and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
-        try:
-            model_path, fetch_info = _fetch_gdrive_to_path(gdid)
-            model = load_model_from_path(model_path)
-        except Exception as e:
-            err_loading = f"Descarga desde Drive falló: {e}"
+        gdid = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="1AbCDeFGhijk_LMNOP", key="gdrive_id").strip()
+        if gdid and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
+            try:
+                model_path, fetch_info = _fetch_gdrive_to_path(gdid)
+                model = load_model_from_path(model_path)
+            except Exception as e:
+                err_loading = f"Descarga desde Drive falló: {e}"
 
     ####################################
     
