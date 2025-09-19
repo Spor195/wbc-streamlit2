@@ -135,6 +135,72 @@ def load_class_names(file) -> list:
     except Exception:
         return []
 
+
+
+
+# --- Descarga robusta desde Google Drive (maneja archivos grandes con confirmación) ---
+def _fetch_gdrive_to_path(file_id: str) -> tuple[str, dict]:
+    """
+    Descarga un archivo grande de Google Drive dado su file_id.
+    Maneja el token de confirmación 'download_warning' automáticamente.
+    Devuelve (ruta_local, info).
+    """
+    import http.cookiejar as cookielib
+    import urllib.parse as _urlparse
+    base = "https://docs.google.com/uc?export=download"
+    cj = cookielib.CookieJar()
+    opener = _urlreq.build_opener(_urlreq.HTTPCookieProcessor(cj))
+
+    def _request(url):
+        req = _urlreq.Request(url)
+        req.add_header("User-Agent", "streamlit-wbc/1.0")
+        req.add_header("Accept", "*/*")
+        return opener.open(req)
+
+    # 1) primer intento
+    url1 = f"{base}&id={file_id}"
+    resp = _request(url1)
+    html = resp.read()
+    # 2) buscar token de confirmación si GDrive avisa "too large to scan"
+    token = None
+    for c in cj:
+        if c.name.startswith("download_warning"):
+            token = c.value
+            break
+    if token is None:
+        # intenta extraer token desde el HTML (fallback)
+        try:
+            text = html.decode("utf-8", errors="ignore")
+            import re
+            m = re.search(r"confirm=([0-9A-Za-z_]+)", text)
+            if m:
+                token = m.group(1)
+        except Exception:
+            pass
+
+    # 3) segunda solicitud con confirm token (si hace falta)
+    if token:
+        url2 = f"{base}&id={file_id}&confirm={token}"
+        resp = _request(url2)
+
+    # 4) descarga a disco en streaming
+    tmpdir = tempfile.mkdtemp(prefix="wbc_gd_")
+    fpath = os.path.join(tmpdir, "modelo_final.keras")  # nombre por defecto
+    total = 0
+    with open(fpath, "wb") as out:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+            total += len(chunk)
+
+    info = {"status": 200, "final_url": f"gdrive:{file_id}", "length": total}
+    return fpath, info
+
+
+
+
 # =========================
 # Utilidades API GitHub
 # =========================
@@ -166,6 +232,14 @@ def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None)
 # Barra lateral — Modelo y opciones
 # ======================================================
 st.sidebar.header("Modelo y opciones")
+
+
+src = st.sidebar.radio(
+    "Origen del modelo",
+    ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)", "Google Drive (ID)"],
+    index=2
+)
+
 
 src = st.sidebar.radio(
     "Origen del modelo",
@@ -200,6 +274,26 @@ try:
             model_path, fetch_info = _fetch_to_path(url_direct, bearer_token=token_direct or None)
             model = load_model_from_path(model_path)
 
+
+
+    ###### AÑADIDO ELIF
+    elif src == "Google Drive (ID)":
+    gdid = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="1AbCDeFGhijk_LMNOP", key="gdrive_id").strip()
+    if gdid and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
+        try:
+            model_path, fetch_info = _fetch_gdrive_to_path(gdid)
+            model = load_model_from_path(model_path)
+        except Exception as e:
+            err_loading = f"Descarga desde Drive falló: {e}"
+
+    ####################################
+    
+
+
+
+
+
+    
     # ---------- GitHub Release (público) ----------
     elif src == "GitHub Release (público)":
         gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
