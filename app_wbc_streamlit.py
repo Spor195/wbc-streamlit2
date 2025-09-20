@@ -182,6 +182,33 @@ def _fetch_gdrive_to_path(file_id: str) -> tuple[str, dict]:
                     break
                 out.write(chunk)
                 total += len(chunk)
+        # Auto-detección y renombrado de extensión si falta o no es soportada
+        try:
+            low = fpath.lower()
+            supported = (low.endswith('.keras') or low.endswith('.h5') or low.endswith('.zip'))
+            if not supported:
+                with open(fpath, 'rb') as _fh:
+                    head = _fh.read(8)
+                new_ext = None
+                # HDF5 signature -> .h5
+                if head.startswith(b"\x89HDF"):
+                    new_ext = '.h5'
+                # ZIP signature -> distinguir SavedModel vs .keras
+                elif head.startswith(b"PK\x03\x04"):
+                    import zipfile
+                    with zipfile.ZipFile(fpath, 'r') as z:
+                        names = z.namelist()
+                        if any(n.endswith('saved_model.pb') for n in names):
+                            new_ext = '.zip'
+                        else:
+                            new_ext = '.keras'
+                if new_ext:
+                    new_path = fpath + new_ext
+                    import os
+                    os.rename(fpath, new_path)
+                    fpath = new_path
+        except Exception:
+            pass
         return fpath, total
 
     # 1) Primer intento: uc?export=download
@@ -285,12 +312,12 @@ try:
 
      ###### AÑADIDO ELIF
     elif src == "Google Drive (ID)":
-        gdid_raw = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="pegar ID o URL de Drive", key="gdrive_id").strip()
-        if gdid_raw and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
-            try:
-                gdid = _gdrive_extract_id(gdid_raw)
-                model_path, fetch_info = _fetch_gdrive_to_path(gdid)
-                model = load_model_from_path(model_path)
+    gdid_raw = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="pegar ID o URL de Drive", key="gdrive_id").strip()
+    if gdid_raw and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
+        try:
+            gdid = _gdrive_extract_id(gdid_raw)
+            model_path, fetch_info = _fetch_gdrive_to_path(gdid)
+            model = load_model_from_path(model_path)
             except Exception as e:
                 err_loading = f"Descarga desde Drive falló: {e}"
 
