@@ -233,14 +233,6 @@ def _resolve_release_asset_download_url(user, repo, tag, asset_name, token=None)
 # ======================================================
 st.sidebar.header("Modelo y opciones")
 
-
-src = st.sidebar.radio(
-    "Origen del modelo",
-    ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)", "Google Drive (ID)"],
-    index=2
-)
-
-
 src = st.sidebar.radio(
     "Origen del modelo",
     ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)"],
