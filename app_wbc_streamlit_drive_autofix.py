@@ -1,6 +1,7 @@
 # app_wbc_streamlit_drive_autofix.py
 # ------------------------------------------------------
-# Clasificador WBC – Carga de modelo robusta (Drive/URL)
+# Clasificador WBC – Carga de modelo en prueba (Drive/URL)
+# - Uso en docencia o investigación
 # - Acepta ID o URL de Google Drive
 # - Maneja confirm-token y endpoint alterno (drive.usercontent)
 # - Auto-detecta y renombra .keras / .h5 / SavedModel .zip
