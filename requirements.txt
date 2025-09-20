@@ -1,11 +1,7 @@
-pip==24.0
-setuptools==68.2.2
-wheel==0.42.0
-
 streamlit==1.36.0
-tensorflow-cpu==2.15.0.post1
+tensorflow-cpu==2.16.1
 keras==3.3.3
-tensorflow-io-gcs-filesystem==0.36.0
+tensorflow-io-gcs-filesystem==0.37.0
 numpy==1.26.4
 pillow==10.3.0
 h5py==3.10.0
