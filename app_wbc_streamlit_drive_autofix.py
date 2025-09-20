@@ -286,7 +286,7 @@ except Exception as e:
 # ======================================================
 # Cuerpo — Reporte de carga y predicción de prueba
 # ======================================================
-st.title("Clasificador de leucocitos — Carga de modelo robusta")
+st.title("Clasificador de leucocitos — modelo en prueba")
 
 if fetch_info:
     with st.sidebar:
