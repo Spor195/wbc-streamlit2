@@ -1,6 +1,6 @@
 streamlit==1.36.0
 tensorflow-cpu==2.20.0
-keras==3.4.1
+# No fijar keras: TF instalará la versión requerida (>=3.10)
 numpy==2.1.1
 pillow==10.4.0
 h5py==3.12.1
