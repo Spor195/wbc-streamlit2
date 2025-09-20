@@ -235,8 +235,8 @@ st.sidebar.header("Modelo y opciones")
 
 src = st.sidebar.radio(
     "Origen del modelo",
-    ["Subir archivo", "URL directa", "GitHub Release (público)", "Ruta local (servidor)"],
-    index=2
+    ["Subir archivo", "URL directa", "GitHub Release (público)", "Google Drive (ID)", "Ruta local (servidor)"],
+    index=3
 )
 
 mfile = None
