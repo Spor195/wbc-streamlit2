@@ -139,72 +139,87 @@ def load_class_names(file) -> list:
 
 
 # --- Descarga robusta desde Google Drive (maneja archivos grandes con confirmación) ---
+
+# ======================================================
+# Utilidades Google Drive (ID o URL) — normalización y descarga robusta
+# ======================================================
+import urllib.request as _urlreq, urllib.error as _urlerr, urllib.parse as _urlparse
+import http.cookiejar as _cookielib
+import re as _re
+
+def _gdrive_extract_id(x: str) -> str:
+    """Acepta ID o URL y devuelve el file_id (solo [A-Za-z0-9_-])."""
+    s = (x or "").strip()
+    s = s.strip().strip("{}[]() \n\r\t")
+    m = _re.search(r"/file/d/([A-Za-z0-9_-]{20,})", s)
+    if not m:
+        m = _re.search(r"[?&]id=([A-Za-z0-9_-]{20,})", s)
+    if m:
+        s = m.group(1)
+    if not _re.fullmatch(r"[A-Za-z0-9_-]{20,}", s):
+        raise ValueError("El ID/URL de Drive no es válido. Pegue el ID exacto o una URL de Drive.")
+    return s
+
 def _fetch_gdrive_to_path(file_id: str) -> tuple[str, dict]:
-    """
-    Descarga un archivo grande de Google Drive dado su file_id.
-    Maneja el token de confirmación 'download_warning' automáticamente.
-    Devuelve (ruta_local, info).
-    """
-    import http.cookiejar as cookielib
-    import urllib.parse as _urlparse
-    base = "https://docs.google.com/uc?export=download"
-    cj = cookielib.CookieJar()
+    """Descarga un archivo grande de Google Drive con confirm token y reintentos."""
+    import tempfile, os
+    cj = _cookielib.CookieJar()
     opener = _urlreq.build_opener(_urlreq.HTTPCookieProcessor(cj))
 
-    def _request(url):
-        req = _urlreq.Request(url)
-        req.add_header("User-Agent", "streamlit-wbc/1.0")
-        req.add_header("Accept", "*/*")
+    def _do(url):
+        req = _urlreq.Request(url, headers={"User-Agent":"wbc-streamlit/1.1"})
         return opener.open(req)
 
-    # 1) primer intento
-    url1 = f"{base}&id={file_id}"
-    resp = _request(url1)
-    html = resp.read()
-    # 2) buscar token de confirmación si GDrive avisa "too large to scan"
-    token = None
-    for c in cj:
-        if c.name.startswith("download_warning"):
-            token = c.value
-            break
-    if token is None:
-        # intenta extraer token desde el HTML (fallback)
-        try:
-            text = html.decode("utf-8", errors="ignore")
-            import re
-            m = re.search(r"confirm=([0-9A-Za-z_]+)", text)
-            if m:
-                token = m.group(1)
-        except Exception:
-            pass
+    def _stream_to_tmp(resp, fname_hint="model.bin"):
+        tmpdir = tempfile.mkdtemp(prefix="wbc_gd_")
+        fname = fname_hint or "model.bin"
+        fpath = os.path.join(tmpdir, fname)
+        total = 0
+        with open(fpath, "wb") as out:
+            while True:
+                chunk = resp.read(1024*1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+                total += len(chunk)
+        return fpath, total
 
-    # 3) segunda solicitud con confirm token (si hace falta)
-    if token:
-        url2 = f"{base}&id={file_id}&confirm={token}"
-        resp = _request(url2)
-
-    # 4) descarga a disco en streaming
-    tmpdir = tempfile.mkdtemp(prefix="wbc_gd_")
-    fpath = os.path.join(tmpdir, "modelo_final.keras")  # nombre por defecto
-    total = 0
-    with open(fpath, "wb") as out:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
+    # 1) Primer intento: uc?export=download
+    base1 = "https://docs.google.com/uc?export=download&id=" + file_id
+    last_err = None
+    try:
+        r1 = _do(base1)
+        cookie_token = None
+        for c in cj:
+            if c.name.startswith("download_warning"):
+                cookie_token = c.value
                 break
-            out.write(chunk)
-            total += len(chunk)
+        if cookie_token:
+            url2 = base1 + "&confirm=" + cookie_token
+            r2 = _do(url2)
+            fname = r2.headers.get("Content-Disposition","" ).split("filename=")[-1].strip('"; ') or "model.bin"
+            p, n = _stream_to_tmp(r2, fname)
+        else:
+            fname = r1.headers.get("Content-Disposition","" ).split("filename=")[-1].strip('"; ') or "model.bin"
+            p, n = _stream_to_tmp(r1, fname)
+        if n > 0:
+            return p, {"status":200, "final_url": "gdrive:"+file_id, "length": n}
+    except Exception as e:
+        last_err = e
 
-    info = {"status": 200, "final_url": f"gdrive:{file_id}", "length": total}
-    return fpath, info
+    # 2) Segundo intento: drive.usercontent.google.com
+    base2 = "https://drive.usercontent.google.com/download?id=" + file_id + "&export=download"
+    try:
+        r3 = _do(base2)
+        fname = r3.headers.get("Content-Disposition","" ).split("filename=")[-1].strip('"; ') or "model.bin"
+        p, n = _stream_to_tmp(r3, fname)
+        if n > 0:
+            return p, {"status":200, "final_url": "gdrive-usercontent:"+file_id, "length": n}
+    except Exception as e:
+        last_err = e
 
+    raise RuntimeError(f"Descarga desde Drive falló (bytes=0). ID: {file_id}. Detalle: {last_err}")
 
-
-
-# =========================
-# Utilidades API GitHub
-# =========================
-import json as _json
 
 def _github_api_json(url: str, token: str | None = None) -> dict:
     req = _urlreq.Request(url)
@@ -270,11 +285,12 @@ try:
 
      ###### AÑADIDO ELIF
     elif src == "Google Drive (ID)":
-        gdid = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="1AbCDeFGhijk_LMNOP", key="gdrive_id").strip()
-        if gdid and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
-            try:
-                model_path, fetch_info = _fetch_gdrive_to_path(gdid)
-                model = load_model_from_path(model_path)
+    gdid_raw = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="pegar ID o URL de Drive", key="gdrive_id").strip()
+    if gdid_raw and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
+        try:
+            gdid = _gdrive_extract_id(gdid_raw)
+            model_path, fetch_info = _fetch_gdrive_to_path(gdid)
+            model = load_model_from_path(model_path)
             except Exception as e:
                 err_loading = f"Descarga desde Drive falló: {e}"
 
