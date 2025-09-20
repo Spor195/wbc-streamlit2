@@ -1,372 +1,300 @@
-# app_wbc_streamlit_drive_autofix.py
-# ------------------------------------------------------
-# Clasificador WBC – Carga de modelo en prueba (Drive/URL)
-# - Uso en docencia o investigación
-# - Acepta ID o URL de Google Drive
-# - Maneja confirm-token y endpoint alterno (drive.usercontent)
-# - Auto-detecta y renombra .keras / .h5 / SavedModel .zip
-# ------------------------------------------------------
+# -*- coding: utf-8 -*-
+# Clasificador de leucocitos — Carga de modelo robusta
+# Autor: Sabino + asistente
+# Requisitos (para Py 3.13 en Streamlit Cloud):
+#   streamlit==1.36.0
+#   tensorflow-cpu==2.20.0
+#   numpy==2.1.1
+#   pillow==10.4.0
+#   h5py==3.12.1
+#   protobuf>=5.28.0,<6
+#   typing-extensions==4.12.2
 
-import os, io, json, zipfile, tempfile, re
+from __future__ import annotations
+import io
+import os
+import zipfile
+import tempfile
+import shutil
+import time
+from pathlib import Path
+from typing import Tuple, Dict, Optional
+
+import requests
 import numpy as np
 from PIL import Image
 import streamlit as st
+import tensorflow as tf
 
-# =========================
-# TensorFlow (carga perezosa)
-# =========================
-try:
-    import tensorflow as tf
-except Exception:
-    tf = None
+# -----------------------------------------------------------------------------
+# Configuración de página
+# -----------------------------------------------------------------------------
+st.set_page_config(page_title="Clasificador de leucocitos — modelo en prueba",
+                   page_icon="🧫",
+                   layout="wide")
 
-# =========================
-# Utilidades genéricas
-# =========================
-import urllib.request as _urlreq, urllib.error as _urlerr, urllib.parse as _urlparse
-import http.cookiejar as _cookielib
+# -----------------------------------------------------------------------------
+# Utilidades
+# -----------------------------------------------------------------------------
+def _fmt_bytes(n: int) -> str:
+    for unit in ["B", "KB", "MB", "GB"]:
+        if n < 1024.0:
+            return f"{n:,.0f} {unit}".replace(",", " ")
+        n /= 1024.0
+    return f"{n:.1f} TB"
 
-def _ensure_tf():
-    if tf is None:
-        raise RuntimeError("TensorFlow no está disponible. Instálalo e inténtalo nuevamente.")
+def _ensure_dir(p: Path) -> Path:
+    p.mkdir(parents=True, exist_ok=True)
+    return p
 
+# -----------------------------------------------------------------------------
+# Descarga de archivos (URL / Google Drive ID)
+# -----------------------------------------------------------------------------
+SESSION = requests.Session()
+SESSION.headers.update({"User-Agent": "wbc-streamlit/1.0"})
 
+@st.cache_data(show_spinner=False)
+def fetch_url_cached(url: str, token: Optional[str] = None) -> Tuple[str, Dict]:
+    """
+    Descarga un recurso binario y devuelve:
+      - ruta local al archivo
+      - metadata útil (final_url, bytes, ts)
+    Se cachea en disco del contenedor mientras viva el proceso.
+    """
+    t0 = time.time()
+    headers = {}
+    if token:
+        headers["Authorization"] = f"token {token}"
 
+    with SESSION.get(url, headers=headers, stream=True, timeout=120) as r:
+        r.raise_for_status()
+        total = 0
+        suffix = Path(url).name or "download.bin"
+        fd, tmp_path = tempfile.mkstemp(prefix="wbc_", suffix=f"__{suffix}")
+        os.close(fd)
+        with open(tmp_path, "wb") as f:
+            for chunk in r.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    f.write(chunk)
+                    total += len(chunk)
 
-# Al inicio del script, tras las importaciones
-DEFAULT_MODEL_URL = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+    info = {
+        "final_url": r.url,
+        "bytes": total,
+        "elapsed_s": time.time() - t0,
+        "ts": int(t0),
+    }
+    return tmp_path, info
+
+def build_drive_direct_url(file_id: str) -> str:
+    # URL directa oficial de descarga para Drive (sin librerías extra)
+    return f"https://drive.usercontent.google.com/download?id={file_id}&export=download"
+
+# -----------------------------------------------------------------------------
+# Carga del modelo
+# -----------------------------------------------------------------------------
+@st.cache_resource(show_spinner=False)
+def load_model_from_path(model_path: str):
+    """
+    Carga .keras / .h5 o SavedModel contenido en .zip
+    """
+    p = Path(model_path)
+    ext = p.suffix.lower()
+
+    if ext in {".keras", ".h5"}:
+        model = tf.keras.models.load_model(str(p), compile=False)
+        return model
+
+    if ext == ".zip":
+        # Descomprimir en un directorio temporal y cargar SavedModel
+        tmpdir = Path(tempfile.mkdtemp(prefix="wbc_savedmodel_"))
+        with zipfile.ZipFile(str(p), "r") as zf:
+            zf.extractall(tmpdir)
+        # Buscar carpeta con saved_model.pb
+        candidates = list(tmpdir.rglob("saved_model.pb"))
+        if not candidates:
+            raise ValueError("El .zip no contiene un SavedModel válido (saved_model.pb).")
+        model_dir = candidates[0].parent
+        model = tf.keras.models.load_model(str(model_dir), compile=False)
+        return model
+
+    raise ValueError(f"Extensión no soportada: {ext}. Usa .keras, .h5 o SavedModel .zip")
+
+# -----------------------------------------------------------------------------
+# Preprocesamiento de imágenes para pruebas rápidas (opcional)
+# -----------------------------------------------------------------------------
+IMG_SIZE = (224, 224)
+
+def load_rgb_from_upload(uploaded) -> np.ndarray:
+    img = Image.open(uploaded).convert("RGB")
+    img = img.resize(IMG_SIZE, resample=Image.BILINEAR)
+    return np.asarray(img, dtype=np.uint8)
+
+def preprocess_rescale(x_uint8: np.ndarray) -> np.ndarray:
+    x = x_uint8.astype("float32") / 255.0
+    return np.expand_dims(x, 0)  # (1, 224, 224, 3)
+
+# -----------------------------------------------------------------------------
+# Autocarga al arrancar
+# -----------------------------------------------------------------------------
+DEFAULT_MODEL_URL = (
+    "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+)
+
+# Permitir override por query param ?model_url=
+params = st.query_params
+if "model_url" in params:
+    st.session_state["last_url"] = params["model_url"]
+
+auto_url = st.session_state.get("last_url") or DEFAULT_MODEL_URL
 
 if "model" not in st.session_state:
     try:
-        path, info = _fetch_to_path_any(DEFAULT_MODEL_URL, None)   # descarga binaria
-        st.session_state["model"] = load_model_from_path(path)     # cachea en proceso
+        path, info = fetch_url_cached(auto_url, None)
+        st.session_state["model"] = load_model_from_path(path)
         st.session_state["fetch_info"] = info
+        st.session_state["last_url"] = info.get("final_url", auto_url)
     except Exception as e:
-        st.warning(f"No se pudo autodescargar el modelo: {e}")
+        # Arranca sin bloquear; el usuario puede cargar desde la barra
+        st.info("Cargue el modelo desde la barra lateral.")
+        st.caption(f"Autocarga fallida: {e}")
 
-
-
-
-# Cachear la descarga por URL (no solo el load_model)
-@st.cache_data(show_spinner=False)
-def fetch_url_cached(url, token=None):
-    return _fetch_to_path_any(url, token)
-
-# En el flujo de "URL directa":
-model_path, fetch_info = fetch_url_cached(url_direct, bearer_token=token_direct or None)
-model = load_model_from_path(model_path)
-
-
-
-
-@st.cache_resource(show_spinner=False)
-def load_model_from_path(path: str):
-    """
-    Carga un modelo desde ruta:
-    - .keras / .h5 -> load_model directo
-    - .zip (SavedModel) -> descomprime y busca saved_model.pb
-    """
-    _ensure_tf()
-    low = path.lower()
-    if low.endswith((".keras", ".h5")):
-        return tf.keras.models.load_model(path)
-
-    if low.endswith(".zip"):
-        tmpdir = tempfile.mkdtemp(prefix="wbc_sm_")
-        with zipfile.ZipFile(path, "r") as z:
-            z.extractall(tmpdir)
-        # SavedModel
-        sm = os.path.join(tmpdir, "saved_model.pb")
-        if os.path.exists(sm):
-            return tf.keras.models.load_model(tmpdir)
-        # Si no hay saved_model.pb, asumir Keras empaquetado
-        raise RuntimeError("El .zip no contiene SavedModel (saved_model.pb).")
-
-    raise RuntimeError("Extensión no soportada. Usa .keras, .h5 o SavedModel .zip")
-
-def _guess_and_fix_extension(fpath: str) -> str:
-    """
-    Si el archivo llegó sin extensión o con extensión genérica,
-    detecta el tipo real y renombra a .keras / .h5 / .zip.
-    """
-    def _is_hdf5(fp):
-        try:
-            with open(fp, "rb") as f:
-                head = f.read(8)
-            # Firma HDF5: \x89HDF\r\n\x1a\n
-            return head.startswith(b"\x89HDF")
-        except Exception:
-            return False
-
-    def _is_zip(fp):
-        try:
-            with open(fp, "rb") as f:
-                head = f.read(4)
-            return head == b"PK\x03\x04"
-        except Exception:
-            return False
-
-    new_ext = None
-    if _is_hdf5(fpath):
-        new_ext = ".h5"
-    elif _is_zip(fpath):
-        # Verificar si es SavedModel.zip
-        try:
-            with zipfile.ZipFile(fpath, "r") as z:
-                names = z.namelist()
-            if any(n.endswith("saved_model.pb") for n in names):
-                new_ext = ".zip"
-            else:
-                # Podría ser un .keras (también es zip); preferimos .keras
-                new_ext = ".keras"
-        except Exception:
-            new_ext = ".zip"
-
-    if new_ext:
-        base, ext = os.path.splitext(fpath)
-        if ext.lower() not in (".keras", ".h5", ".zip"):
-            new_path = base + new_ext
-            os.rename(fpath, new_path)
-            return new_path
-    return fpath
-
-# ======================================================
-# Google Drive – extracción de ID y descarga robusta
-# ======================================================
-def _gdrive_extract_id(x: str) -> str:
-    """Acepta ID o URL y devuelve el file_id (solo [A-Za-z0-9_-])."""
-    s = (x or "").strip()
-    s = s.strip().strip("{}[]() \n\r\t")
-    m = re.search(r"/file/d/([A-Za-z0-9_-]{20,})", s)
-    if not m:
-        m = re.search(r"[?&]id=([A-Za-z0-9_-]{20,})", s)
-    if m:
-        s = m.group(1)
-    if not re.fullmatch(r"[A-Za-z0-9_-]{20,}", s):
-        raise ValueError("El ID/URL de Drive no es válido. Pegue el ID exacto o una URL de Drive.")
-    return s
-
-def _stream_to_tmp(resp, fname_hint="model.bin"):
-    tmpdir = tempfile.mkdtemp(prefix="wbc_dl_")
-    fname = fname_hint or "model.bin"
-    fpath = os.path.join(tmpdir, fname)
-    total = 0
-    with open(fpath, "wb") as out:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            total += len(chunk)
-    return fpath, total
-
-def _fetch_gdrive_to_path(file_id: str) -> tuple[str, dict]:
-    """
-    Descarga un archivo grande de Google Drive; maneja confirm-token y reintentos.
-    Devuelve (ruta_local, info).
-    """
-    cj = _cookielib.CookieJar()
-    opener = _urlreq.build_opener(_urlreq.HTTPCookieProcessor(cj))
-
-    def _do(url):
-        req = _urlreq.Request(url, headers={"User-Agent": "wbc-streamlit/1.1", "Accept": "*/*"})
-        return opener.open(req)
-
-    # 1) Primer intento: uc?export=download con token
-    base1 = "https://docs.google.com/uc?export=download&id=" + file_id
-    last_err = None
-    try:
-        r1 = _do(base1)
-        cookie_token = None
-        for c in cj:
-            if c.name.startswith("download_warning"):
-                cookie_token = c.value
-                break
-        if cookie_token:
-            url2 = base1 + "&confirm=" + cookie_token
-            r2 = _do(url2)
-            fname = r2.headers.get("Content-Disposition", "").split("filename=")[-1].strip('"; ') or "model.bin"
-            p, n = _stream_to_tmp(r2, fname)
-        else:
-            fname = r1.headers.get("Content-Disposition", "").split("filename=")[-1].strip('"; ') or "model.bin"
-            p, n = _stream_to_tmp(r1, fname)
-        if n > 1024 * 100:  # >100 KB como sanity check
-            return _guess_and_fix_extension(p), {"status": 200, "final_url": "gdrive:"+file_id, "length": n}
-    except Exception as e:
-        last_err = e
-
-    # 2) Segundo intento: drive.usercontent.google.com
-    base2 = "https://drive.usercontent.google.com/download?id=" + file_id + "&export=download"
-    try:
-        r3 = _do(base2)
-        fname = r3.headers.get("Content-Disposition", "").split("filename=")[-1].strip('"; ') or "model.bin"
-        p, n = _stream_to_tmp(r3, fname)
-        if n > 1024 * 100:
-            return _guess_and_fix_extension(p), {"status": 200, "final_url": "gdrive-usercontent:"+file_id, "length": n}
-    except Exception as e:
-        last_err = e
-
-    raise RuntimeError(f"Descarga desde Drive falló (bytes<=100KB). ID: {file_id}. Detalle: {last_err}")
-
-# ======================================================
-# Descarga genérica por URL (con soporte Drive)
-# ======================================================
-def _fetch_to_path_any(url: str, bearer_token: str | None = None) -> tuple[str, dict]:
-    # Si es una URL de Drive, derivar al flujo Drive robusto
-    low = url.lower()
-    # usercontent (directo) -> úsalo tal cual (es el endpoint alterno)
-    if "drive.google.com" in low:
-        # extraer ID y reutilizar flujo Drive
-        fid = _gdrive_extract_id(url)
-        return _fetch_gdrive_to_path(fid)
-
-    req = _urlreq.Request(url)
-    req.add_header("User-Agent", "streamlit-wbc/1.1")
-    req.add_header("Accept", "application/octet-stream")
-    if bearer_token:
-        req.add_header("Authorization", f"Bearer {bearer_token}")
-
-    tmpdir = tempfile.mkdtemp(prefix="wbc_dl_")
-    fname = os.path.basename(url.split("?")[0]) or "model.bin"
-    fpath = os.path.join(tmpdir, fname)
-
-    total = 0
-    with _urlreq.urlopen(req) as resp, open(fpath, "wb") as out:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
-            total += len(chunk)
-
-    # sanity check
-    if total <= 1024 * 100:
-        # Intento de rescate: si era drive.usercontent y algo falló, reintentar
-        if "drive.usercontent.google.com" in low:
-            fid = _gdrive_extract_id(url)
-            return _fetch_gdrive_to_path(fid)
-        raise RuntimeError(f"Descarga muy pequeña ({total} bytes). ¿La URL es binaria directa?")
-
-    fpath = _guess_and_fix_extension(fpath)
-    return fpath, {"status": 200, "final_url": url, "length": total}
-
-#########################
-# tras una carga exitosa:
-st.session_state["last_url"] = fetch_info.get("final_url", DEFAULT_MODEL_URL)
-#########################
-
-# ======================================================
-# UI — Sidebar
-# ======================================================
+# -----------------------------------------------------------------------------
+# UI — barra lateral (cargar modelo)
+# -----------------------------------------------------------------------------
 st.sidebar.header("Modelo y opciones")
 
-src = st.sidebar.radio(
+origin = st.sidebar.radio(
     "Origen del modelo",
     ["Subir archivo", "URL directa", "Google Drive (ID)", "Ruta local (servidor)"],
-    index=2
+    index=1,
 )
 
-mfile = None
-model = None
-model_path = None
-fetch_info = None
-err_loading = None
+token_direct = None
+model_loaded_now = False
+fetch_info_now: Optional[Dict] = None
 
-try:
-    # ---------- Subir archivo ----------
-    if src == "Subir archivo":
-        mfile = st.sidebar.file_uploader("Modelo (.keras, .h5 o SavedModel .zip)", type=["keras", "h5", "zip"], key="up_model")
-        if mfile is not None:
-            tmpdir = tempfile.mkdtemp(prefix="wbc_up_")
-            model_path = os.path.join(tmpdir, mfile.name)
-            with open(model_path, "wb") as out:
-                out.write(mfile.read())
-            model_path = _guess_and_fix_extension(model_path)
-            model = load_model_from_path(model_path)
-            fetch_info = {"status": 200, "final_url": "archivo_subido", "length": os.path.getsize(model_path)}
+if origin == "Subir archivo":
+    up = st.sidebar.file_uploader(
+        "Modelo (.keras/.h5/.zip)", type=["keras", "h5", "zip"]
+    )
+    if st.sidebar.button("Cargar ahora", disabled=(up is None)):
+        if up is None:
+            st.warning("Suba un archivo de modelo.")
+        else:
+            # Guardar a disco temporal y cargar
+            fd, tmp = tempfile.mkstemp(prefix="wbc_upload_", suffix=f"__{up.name}")
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                shutil.copyfileobj(up, f)
+            model = load_model_from_path(tmp)
+            st.session_state["model"] = model
+            fetch_info_now = {"final_url": f"upload://{up.name}", "bytes": up.size}
+            st.session_state["fetch_info"] = fetch_info_now
+            st.session_state["last_url"] = fetch_info_now["final_url"]
+            model_loaded_now = True
 
-    # ---------- URL directa ----------
-    elif src == "URL directa":
-        url_direct = st.sidebar.text_input("URL del modelo (.keras/.h5/.zip)", placeholder="https://...", key="url_direct").strip()
-        token_direct = st.sidebar.text_input("Token (opcional si es privado)", type="password", key="tok_direct").strip()
-        if url_direct and st.sidebar.button("Cargar ahora", use_container_width=True, key="btn_direct"):
-            model_path, fetch_info = _fetch_to_path_any(url_direct, bearer_token=token_direct or None)
-            model = load_model_from_path(model_path)
+elif origin == "URL directa":
+    url_direct = st.sidebar.text_input(
+        "URL del modelo (.keras/.h5/.zip)",
+        value=auto_url,
+        help="Pega la URL completa del asset (GitHub Releases o equivalente).",
+    )
+    token_direct = st.sidebar.text_input(
+        "Token (opcional si es privado)", type="password"
+    )
+    if st.sidebar.button("Cargar ahora"):
+        try:
+            path, fetch_info_now = fetch_url_cached(url_direct, token_direct or None)
+            model = load_model_from_path(path)
+            st.session_state["model"] = model
+            st.session_state["fetch_info"] = fetch_info_now
+            st.session_state["last_url"] = fetch_info_now.get("final_url", url_direct)
+            model_loaded_now = True
+        except Exception as e:
+            st.sidebar.error(f"Error al cargar: {e}")
 
-    # ---------- Google Drive (ID) ----------
-    elif src == "Google Drive (ID)":
-        gdid_raw = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="pegar ID o URL de Drive", key="gdrive_id").strip()
-        if gdid_raw and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
-            try:
-                gdid = _gdrive_extract_id(gdid_raw)
-                model_path, fetch_info = _fetch_gdrive_to_path(gdid)
-                model = load_model_from_path(model_path)
-            except Exception as e:
-                err_loading = f"Descarga desde Drive falló: {e}"
+elif origin == "Google Drive (ID)":
+    file_id = st.sidebar.text_input("ID de archivo de Google Drive")
+    if st.sidebar.button("Cargar desde Drive"):
+        try:
+            drive_url = build_drive_direct_url(file_id.strip())
+            path, fetch_info_now = fetch_url_cached(drive_url, None)
+            model = load_model_from_path(path)
+            st.session_state["model"] = model
+            st.session_state["fetch_info"] = fetch_info_now
+            st.session_state["last_url"] = fetch_info_now.get("final_url", drive_url)
+            model_loaded_now = True
+        except Exception as e:
+            st.sidebar.error(f"Descarga desde Drive falló: {e}")
 
-    # ---------- Ruta local (servidor) ----------
-    elif src == "Ruta local (servidor)":
-        local_path = st.sidebar.text_input("Ruta absoluta en el servidor", placeholder="/path/to/model.keras|.h5|.zip", key="local_path").strip()
-        if local_path and st.sidebar.button("Cargar desde ruta local", use_container_width=True, key="btn_local"):
-            if not os.path.exists(local_path):
-                raise RuntimeError(f"No existe la ruta: {local_path}")
-            model_path = _guess_and_fix_extension(local_path)
-            model = load_model_from_path(model_path)
-            fetch_info = {"status": 200, "final_url": f"file://{local_path}", "length": os.path.getsize(local_path)}
+else:  # Ruta local (servidor)
+    local_path = st.sidebar.text_input("Ruta absoluta del archivo .keras/.h5/.zip")
+    if st.sidebar.button("Cargar (ruta local)"):
+        try:
+            if not local_path:
+                raise ValueError("Ingrese una ruta válida.")
+            model = load_model_from_path(local_path)
+            st.session_state["model"] = model
+            fetch_info_now = {"final_url": f"file://{local_path}"}
+            st.session_state["fetch_info"] = fetch_info_now
+            st.session_state["last_url"] = fetch_info_now["final_url"]
+            model_loaded_now = True
+        except Exception as e:
+            st.sidebar.error(f"Error al cargar desde ruta local: {e}")
 
-except Exception as e:
-    err_loading = str(e)
+# Mostrar resultado de la barra lateral
+fi = st.session_state.get("fetch_info")
+if fi and ("bytes" in fi):
+    st.sidebar.success(
+        f"Descarga OK · HTTP 200 · bytes: {fi['bytes']}"
+    )
+    st.sidebar.caption(f"URL final: {fi.get('final_url','')}")
 
-# ======================================================
-# Cuerpo — Reporte de carga y predicción de prueba
-# ======================================================
+# -----------------------------------------------------------------------------
+# UI — contenido principal
+# -----------------------------------------------------------------------------
 st.title("Clasificador de leucocitos — modelo en prueba")
 
-if fetch_info:
-    with st.sidebar:
-        st.info(f"Descarga OK · HTTP 200 · bytes: {fetch_info.get('length', '—')}")
-        st.caption("URL final:")
-        st.code(fetch_info.get("final_url", "—"), language="text")
-
-if err_loading:
-    st.error(f"Error al cargar el modelo: {err_loading}")
-
-if model is not None:
-    st.success("Modelo cargado correctamente.")
-    try:
-        # Mostrar input_shape si es posible
-        sig = getattr(model, "inputs", None)
-        if sig:
-            st.write("**Input shape:**", model.inputs[0].shape)
-    except Exception:
-        pass
-
-    # Demo mínima de inferencia
-    img = st.file_uploader("Sube una imagen para probar (opcional)", type=["png", "jpg", "jpeg"])
-    if img is not None:
-        im = Image.open(img).convert("RGB").resize((224, 224))
-        x = np.array(im, dtype=np.float32)[None] / 255.0
-        try:
-            preds = model.predict(x, verbose=0)
-            if preds.ndim == 2 and preds.shape[0] == 1:
-                preds = preds[0]
-            if preds.ndim > 1:
-                st.warning(f"Salida con forma inusual: {preds.shape}. Se tomará argmax del último eje.")
-                preds = preds.reshape(-1)
-            # Normalización a probabilidades si parecen logits
-            if np.any(preds < 0) or np.sum(preds) <= 0.99 or np.sum(preds) >= 1.01:
-                try:
-                    from scipy.special import softmax
-                    probs = softmax(preds)
-                except Exception:
-                    exps = np.exp(preds - np.max(preds))
-                    probs = exps / np.sum(exps)
-            else:
-                probs = preds
-            topk = int(st.slider("Top-K a mostrar", 1, min(10, len(probs)), value=min(3, len(probs))))
-            idxs = np.argsort(probs)[::-1][:topk]
-            st.write({int(i): float(probs[i]) for i in idxs})
-        except Exception as e:
-            st.error(f"Inferencia falló: {e}")
-else:
+model = st.session_state.get("model")
+if model is None:
     st.info("Cargue el modelo desde la barra lateral.")
+else:
+    st.success("Modelo cargado correctamente.")
+    # Mostrar input_shape
+    try:
+        if hasattr(model, "inputs") and model.inputs:
+            shape = tuple(int(d) if d is not None else None for d in model.inputs[0].shape)
+        else:
+            # Keras 3 (Functional/Sequential) – fallback
+            shape = tuple(model.get_layer(index=0).input_shape)
+        st.write("**Input shape:**", shape)
+    except Exception:
+        st.write("**Input shape:** (no disponible)")
+
+    # Prueba rápida de inferencia con imagen
+    st.subheader("Prueba rápida (opcional)")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"])
+    with col2:
+        if up_img is not None:
+            rgb = load_rgb_from_upload(up_img)
+            st.image(rgb, caption="Entrada (RGB, 224x224)", width=256)
+            x = preprocess_rescale(rgb)
+            # predict (evitar training=True)
+            y = model(x, training=False).numpy()
+            # aplicar softmax si es necesario
+            if y.ndim == 2 and not np.allclose(np.sum(y, axis=1), 1.0, atol=1e-3):
+                y = tf.nn.softmax(y, axis=-1).numpy()
+            probs = y[0]
+            topk = np.argsort(-probs)[:5]
+            st.write("Top-K (índices):", [int(i) for i in topk])
+            for i in topk:
+                p = float(probs[i])
+                st.write(f"Clase {int(i)} → {p:.3f}")
+                st.progress(min(max(p, 0.0), 1.0))
+
+# Mensajes informativos del evento actual
+if model_loaded_now and fi:
+    st.toast("Modelo cargado y listo.", icon="✅")
