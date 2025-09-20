@@ -30,6 +30,35 @@ def _ensure_tf():
     if tf is None:
         raise RuntimeError("TensorFlow no está disponible. Instálalo e inténtalo nuevamente.")
 
+
+
+
+# Al inicio del script, tras las importaciones
+DEFAULT_MODEL_URL = "https://github.com/Spor195/wbc_streamlit2/releases/download/v1.0.0/modelo_final.keras"
+
+if "model" not in st.session_state:
+    try:
+        path, info = _fetch_to_path_any(DEFAULT_MODEL_URL, None)   # descarga binaria
+        st.session_state["model"] = load_model_from_path(path)     # cachea en proceso
+        st.session_state["fetch_info"] = info
+    except Exception as e:
+        st.warning(f"No se pudo autodescargar el modelo: {e}")
+
+
+
+
+# Cachear la descarga por URL (no solo el load_model)
+@st.cache_data(show_spinner=False)
+def fetch_url_cached(url, token=None):
+    return _fetch_to_path_any(url, token)
+
+# En el flujo de "URL directa":
+model_path, fetch_info = fetch_url_cached(url_direct, bearer_token=token_direct or None)
+model = load_model_from_path(model_path)
+
+
+
+
 @st.cache_resource(show_spinner=False)
 def load_model_from_path(path: str):
     """
@@ -220,6 +249,11 @@ def _fetch_to_path_any(url: str, bearer_token: str | None = None) -> tuple[str, 
 
     fpath = _guess_and_fix_extension(fpath)
     return fpath, {"status": 200, "final_url": url, "length": total}
+
+#########################
+# tras una carga exitosa:
+st.session_state["last_url"] = fetch_info.get("final_url", DEFAULT_MODEL_URL)
+#########################
 
 # ======================================================
 # UI — Sidebar
