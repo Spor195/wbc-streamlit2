@@ -291,8 +291,8 @@ try:
                 gdid = _gdrive_extract_id(gdid_raw)
                 model_path, fetch_info = _fetch_gdrive_to_path(gdid)
                 model = load_model_from_path(model_path)
-                except Exception as e:
-                    err_loading = f"Descarga desde Drive falló: {e}"
+            except Exception as e:
+                err_loading = f"Descarga desde Drive falló: {e}"
 
     ####################################
     
