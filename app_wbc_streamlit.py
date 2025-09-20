@@ -1,3 +1,4 @@
+import os
 # app_wbc_streamlit.py
 # ------------------------------------------------------
 # Clasificador de leucocitos (Streamlit)
@@ -204,7 +205,6 @@ def _fetch_gdrive_to_path(file_id: str) -> tuple[str, dict]:
                             new_ext = '.keras'
                 if new_ext:
                     new_path = fpath + new_ext
-                    import os
                     os.rename(fpath, new_path)
                     fpath = new_path
         except Exception:
@@ -310,9 +310,14 @@ try:
 
 
 
-     ###### AÑADIDO ELIF
+    # (Drive)
+    
     elif src == "Google Drive (ID)":
-        gdid_raw = st.sidebar.text_input("ID de archivo de Google Drive", placeholder="pegar ID o URL de Drive", key="gdrive_id").strip()
+        gdid_raw = st.sidebar.text_input(
+            "ID de archivo de Google Drive",
+            placeholder="pegar ID o URL de Drive",
+            key="gdrive_id"
+        ).strip()
         if gdid_raw and st.sidebar.button("Cargar desde Drive", use_container_width=True, key="btn_gdrive"):
             try:
                 gdid = _gdrive_extract_id(gdid_raw)
@@ -321,15 +326,6 @@ try:
             except Exception as e:
                 err_loading = f"Descarga desde Drive falló: {e}"
 
-    ####################################
-    
-
-
-
-
-
-    
-    # ---------- GitHub Release (público) ----------
     elif src == "GitHub Release (público)":
         gh_user  = st.sidebar.text_input("Usuario/Org", value="Spor195", key="gh_user").strip()
         gh_repo  = st.sidebar.text_input("Repositorio", value="wbc_streamlit2", key="gh_repo").strip()
