@@ -1,9 +1,8 @@
 streamlit==1.36.0
-tensorflow-cpu==2.16.1
-keras==3.3.3
-tensorflow-io-gcs-filesystem==0.37.0
-numpy==1.26.4
-pillow==10.3.0
-h5py==3.10.0
+tensorflow-cpu==2.20.0
+keras==3.4.1
+numpy==2.1.1
+pillow==10.4.0
+h5py==3.12.1
 protobuf==4.25.3
-typing-extensions==4.10.0
+typing-extensions==4.12.2
