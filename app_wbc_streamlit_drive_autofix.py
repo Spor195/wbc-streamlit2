@@ -200,9 +200,8 @@ elif origin == "URL directa":
         value=auto_url,
         help="Pega la URL completa del asset (GitHub Releases o equivalente).",
     )
-    token_direct = st.sidebar.text_input(
-        "Token (opcional si es privado)", type="password"
-    )
+    token_direct = st.sidebar.text_input("Token (opcional si es privado)", type="password"
+    , key="gh_token")
     if st.sidebar.button("Cargar ahora"):
         try:
             path, fetch_info_now = fetch_url_cached(url_direct, token_direct or None)
