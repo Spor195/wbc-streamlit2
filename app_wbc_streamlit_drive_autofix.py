@@ -1,11 +1,12 @@
+
 # -*- coding: utf-8 -*-
-import io, os, sys, json, tempfile
+import io, os, json, tempfile
 import numpy as np
 import streamlit as st
 from urllib.parse import urlparse
 import urllib.request as urlreq
-from pathlib import Path
 from typing import List, Dict, Any
+from pathlib import Path
 
 # TensorFlow/Keras
 import tensorflow as tf
@@ -17,11 +18,8 @@ st.set_page_config(page_title="Clasificador de leucocitos — modelo en prueba",
 # ======================================================================
 # CONFIGURACIÓN
 # ======================================================================
-# 1) Puedes fijar aquí una URL estable (GitHub Releases, etc.).
-#    También puedes definir una variable de entorno DEFAULT_MODEL_URL.
-DEFAULT_MODEL_URL = "https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.1/modelo_final.keras"  # <-- coloca tu URL si deseas.
-
-# 2) Nombre del archivo JSON con etiquetas en el repo (lista o dict).
+# URL estable de tu release (ajústala si cambias de tag o nombre)
+DEFAULT_MODEL_URL = "https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.0/modelo_final.keras"
 LABELS_JSON_FILENAME = "labels.json"
 
 # ======================================================================
@@ -32,9 +30,6 @@ def drive_direct_url(file_id: str) -> str:
 
 @st.cache_data(show_spinner=False)
 def fetch_url(url: str, token: str | None = None) -> Dict[str, Any]:
-    """Descarga bytes de una URL. Si token, agrega cabecera Authorization.
-    Retorna dict con ok, data, final_url, error.
-    """
     try:
         req = urlreq.Request(url)
         if token:
@@ -76,24 +71,19 @@ def preprocess_rescale(rgb: np.ndarray) -> tf.Tensor:
     return x
 
 # ----------------------------------------------------------------------
-# Etiquetas desde labels.json
+# Etiquetas desde labels.json (recarga fiable por mtime)
 # ----------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def read_labels_json(path: str) -> List[str] | None:
+def read_labels_json(path: str, mtime: float) -> List[str] | None:
     try:
         with open(path, "r", encoding="utf-8") as f:
             obj = json.load(f)
-        # Aceptar varios formatos:
-        # a) ["Neutrófilo", "Linfocito", ...]
         if isinstance(obj, list) and all(isinstance(x, str) for x in obj):
             return obj
-        # b) { "0": "Neutrófilo", "1": "Linfocito", ... }  (claves dígitos)
         if isinstance(obj, dict):
-            # si todas las claves son dígitos, ordenar por índice
             if all(str(k).isdigit() for k in obj.keys()):
                 pairs = sorted(((int(k), v) for k, v in obj.items()), key=lambda p: p[0])
                 return [v for _, v in pairs]
-            # c) {"Neutrófilo": 0, "Linfocito": 1, ...}  (valores dígitos)
             if all(isinstance(v, int) for v in obj.values()):
                 pairs = sorted(((int(v), k) for k, v in obj.items()), key=lambda p: p[0])
                 return [k for _, k in pairs]
@@ -135,16 +125,23 @@ drive_id = st.sidebar.text_input("ID de Google Drive (si aplica)", value="", key
 local_path = st.sidebar.text_input("Ruta local (solo servidor)", value="", key="local_path")
 
 st.sidebar.divider()
-use_labels_json = False
 labels_from_json = None
+use_labels_json = False
 labels_path = Path(__file__).with_name(LABELS_JSON_FILENAME)
 if labels_path.exists():
-    labels_from_json = read_labels_json(str(labels_path))
+    mtime = labels_path.stat().st_mtime
+    labels_from_json = read_labels_json(str(labels_path), mtime)
     if labels_from_json:
         with st.sidebar.expander("Etiquetas desde labels.json", expanded=True):
             st.caption(f"Se detectó {LABELS_JSON_FILENAME} en el repo.")
             st.code(json.dumps(labels_from_json, ensure_ascii=False, indent=2))
-            use_labels_json = st.checkbox("Usar etiquetas de labels.json", value=True, key="use_labels_json")
+            cols = st.columns([1,1])
+            with cols[0]:
+                use_labels_json = st.checkbox("Usar etiquetas de labels.json", value=True, key="use_labels_json")
+            with cols[1]:
+                if st.button("Recargar etiquetas", key="reload_labels"):
+                    st.cache_data.clear()
+                    st.rerun()
 
 labels_str_default = "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
 labels_str = st.sidebar.text_input(
@@ -208,7 +205,7 @@ except Exception:
     pass
 
 # ======================================================================
-# PRUEBA RÁPIDA (ÚNICA, CORRECTAMENTE INDENTADA)
+# PRUEBA RÁPIDA
 # ======================================================================
 st.subheader("Prueba rápida (opcional)")
 col1, col2 = st.columns([1, 2])
@@ -228,13 +225,11 @@ with col2:
         x = preprocess_rescale(rgb)
         y = model(x, training=False).numpy()
 
-        # Softmax solo si hace falta
         if y.ndim == 2 and not np.allclose(np.sum(y, axis=1), 1.0, atol=1e-3):
             y = tf.nn.softmax(y, axis=-1).numpy()
 
         probs = y[0]
 
-        # Alinear número de etiquetas y clases del modelo
         num_classes = probs.shape[-1]
         if len(CLASS_NAMES) < num_classes:
             CLASS_NAMES += [f"Clase {i}" for i in range(len(CLASS_NAMES), num_classes)]
@@ -242,7 +237,6 @@ with col2:
             CLASS_NAMES = CLASS_NAMES[:num_classes]
         st.sidebar.caption(f"Salidas del modelo: {num_classes} clases")
 
-        # Top-K
         topk = np.argsort(-probs)[:5]
         st.write("Top-K:")
         for i in topk:
@@ -253,7 +247,6 @@ with col2:
             st.write(f"{nombre} → {p:.3f}")
             st.progress(min(max(p, 0.0), 1.0))
 
-        # Top-1
         pred = int(np.argmax(probs))
         pred_name = CLASS_NAMES[pred] if pred < len(CLASS_NAMES) else f"Clase {pred}"
         st.caption(f"Predicción principal: {pred_name} (p={probs[pred]:.3f})")
