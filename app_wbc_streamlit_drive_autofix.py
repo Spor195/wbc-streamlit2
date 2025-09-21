@@ -260,6 +260,17 @@ labels_str = st.sidebar.text_input(
 )
 CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
 thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01)
+
+
+# ── Etiquetas y umbral en la barra lateral ─────────────────────────────────────
+st.sidebar.divider()
+labels_str = st.sidebar.text_input(
+    "Etiquetas de clases (orden del modelo)",
+    "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
+)
+CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
+thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01)
+
 # 
 
 
@@ -285,7 +296,56 @@ else:
         st.write("**Input shape:** (no disponible)")
 
     # Prueba rápida de inferencia con imagen
-    st.subheader("Prueba rápida (opcional)")
+    
+# ── Prueba rápida de inferencia con imagen ─────────────────────────────────────
+st.subheader("Prueba rápida (opcional)")
+col1, col2 = st.columns([1, 2])
+
+with col1:
+    up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"])
+
+with col2:
+    if up_img is not None:
+        # 1) Cargar y mostrar imagen (RGB 224x224)
+        rgb = load_rgb_from_upload(up_img)
+        st.image(rgb, caption="Entrada (RGB, 224x224)", width=256)
+
+        # 2) Preprocesar e inferir
+        x = preprocess_rescale(rgb)
+        y = model(x, training=False).numpy()
+
+        # 3) Softmax solo si hace falta (evita doble-softmax)
+        if y.ndim == 2 and not np.allclose(np.sum(y, axis=1), 1.0, atol=1e-3):
+            y = tf.nn.softmax(y, axis=-1).numpy()
+
+        probs = y[0]  # vector de clases
+
+        # 4) Alinear número de etiquetas y clases del modelo
+        num_classes = probs.shape[-1]
+        if len(CLASS_NAMES) < num_classes:
+            # Completa con etiquetas genéricas si faltan
+            CLASS_NAMES += [f"Clase {i}" for i in range(len(CLASS_NAMES), num_classes)]
+        elif len(CLASS_NAMES) > num_classes:
+            # Recorta si hay más nombres que salidas
+            CLASS_NAMES = CLASS_NAMES[:num_classes]
+        st.sidebar.caption(f"Salidas del modelo: {num_classes} clases")
+
+        # 5) Top-K legible con umbral de indeterminación
+        topk = np.argsort(-probs)[:5]
+        st.write("Top-K:")
+        for i in topk:
+            p = float(probs[i])
+            nombre = CLASS_NAMES[i] if i < len(CLASS_NAMES) else f"Clase {int(i)}"
+            if p < thresh:
+                nombre = f"{nombre} (indeterminado)"
+            st.write(f"{nombre} → {p:.3f}")
+            st.progress(min(max(p, 0.0), 1.0))
+
+        # 6) Resumen Top-1
+        pred = int(np.argmax(probs))
+        pred_name = CLASS_NAMES[pred] if pred < len(CLASS_NAMES) else f"Clase {pred}"
+        st.caption(f"Predicción principal: {pred_name} (p={probs[pred]:.3f})")
+
     col1, col2 = st.columns([1, 2])
     with col1:
         up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"])
