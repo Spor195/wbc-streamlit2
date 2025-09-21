@@ -1,10 +1,10 @@
-
 # -*- coding: utf-8 -*-
 import io, os, sys, json, tempfile
 import numpy as np
 import streamlit as st
 from urllib.parse import urlparse
 import urllib.request as urlreq
+from pathlib import Path
 from typing import List, Dict, Any
 
 # TensorFlow/Keras
@@ -19,7 +19,7 @@ st.set_page_config(page_title="Clasificador de leucocitos — modelo en prueba",
 # ======================================================================
 # 1) Puedes fijar aquí una URL estable (GitHub Releases, etc.).
 #    También puedes definir una variable de entorno DEFAULT_MODEL_URL.
-DEFAULT_MODEL_URL = os.environ.get("DEFAULT_MODEL_URL", "")  # <-- coloca tu URL si deseas.
+DEFAULT_MODEL_URL = "https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.1/modelo_final.keras"  # <-- coloca tu URL si deseas.
 
 # 2) Nombre del archivo JSON con etiquetas en el repo (lista o dict).
 LABELS_JSON_FILENAME = "labels.json"
