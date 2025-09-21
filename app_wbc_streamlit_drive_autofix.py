@@ -259,7 +259,7 @@ labels_str = st.sidebar.text_input(
     "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
 )
 CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
-thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01)
+thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01, key="conf_threshold")
 
 
 # ── Etiquetas y umbral en la barra lateral ─────────────────────────────────────
@@ -269,7 +269,7 @@ labels_str = st.sidebar.text_input(
     "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
 )
 CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
-thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01)
+thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01, key="conf_threshold")
 
 # 
 
@@ -302,7 +302,7 @@ st.subheader("Prueba rápida (opcional)")
 col1, col2 = st.columns([1, 2])
 
 with col1:
-    up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"])
+    up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"], key="test_image_uploader")
 
 with col2:
     if up_img is not None:
@@ -348,7 +348,7 @@ with col2:
 
     col1, col2 = st.columns([1, 2])
     with col1:
-        up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"])
+        up_img = st.file_uploader("Sube una imagen para probar", type=["png", "jpg", "jpeg"], key="test_image_uploader")
     with col2:
         if up_img is not None:
             rgb = load_rgb_from_upload(up_img)
