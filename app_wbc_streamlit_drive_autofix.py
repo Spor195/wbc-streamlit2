@@ -254,20 +254,14 @@ if fi and ("bytes" in fi):
 
 #  Modificación para etiquetas
 st.sidebar.divider()
-labels_str = st.sidebar.text_input(
-    "Etiquetas de clases (orden del modelo)",
-    "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
-)
+labels_str = st.sidebar.text_input("Etiquetas de clases (orden del modelo)", "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo", key="class_labels")
 CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
 thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01, key="conf_threshold")
 
 
 # ── Etiquetas y umbral en la barra lateral ─────────────────────────────────────
 st.sidebar.divider()
-labels_str = st.sidebar.text_input(
-    "Etiquetas de clases (orden del modelo)",
-    "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
-)
+labels_str = st.sidebar.text_input("Etiquetas de clases (orden del modelo)", "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo", key="class_labels")
 CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
 thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01, key="conf_threshold")
 
