@@ -15,6 +15,9 @@ from PIL import Image
 
 st.set_page_config(page_title="Clasificador de leucocitos — modelo en prueba", layout="wide")
 
+from tensorflow.keras.applications.vgg16 import preprocess_input as vgg16_preprocess
+
+
 # ======================================================================
 # CONFIGURACIÓN
 # ======================================================================
@@ -68,6 +71,13 @@ def load_rgb_from_upload(file) -> np.ndarray:
 def preprocess_rescale(rgb: np.ndarray) -> tf.Tensor:
     x = tf.convert_to_tensor(rgb, dtype=tf.float32) / 255.0
     x = tf.expand_dims(x, axis=0)  # (1,224,224,3)
+    return x
+
+def preprocess_tensor_vgg16(rgb: np.ndarray) -> tf.Tensor:
+    # rgb es un array uint8 o float en rango 0–255 y tamaño 224x224x3
+    x = tf.convert_to_tensor(rgb, dtype=tf.float32)  # IMPORTANT: sin dividir /255
+    x = tf.expand_dims(x, axis=0)                    # (1,224,224,3)
+    x = vgg16_preprocess(x)                          # aplica BGR + mean subtraction
     return x
 
 # ----------------------------------------------------------------------
@@ -232,8 +242,13 @@ with col2:
         rgb = load_rgb_from_upload(up_img)
         st.image(rgb, caption="Entrada (RGB, 224x224)", width=256)
 
-        x = preprocess_rescale(rgb)
+        # x = preprocess_rescale(rgb)
+        # y = model(x, training=False).numpy()
+
+        # x = preprocess_rescale(rgb)  
+        x = preprocess_tensor_vgg16(rgb)
         y = model(x, training=False).numpy()
+
 
         if y.ndim == 2 and not np.allclose(np.sum(y, axis=1), 1.0, atol=1e-3):
             y = tf.nn.softmax(y, axis=-1).numpy()
