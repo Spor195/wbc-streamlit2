@@ -251,6 +251,18 @@ if fi and ("bytes" in fi):
     )
     st.sidebar.caption(f"URL final: {fi.get('final_url','')}")
 
+
+#  Modificación para etiquetas
+st.sidebar.divider()
+labels_str = st.sidebar.text_input(
+    "Etiquetas de clases (orden del modelo)",
+    "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
+)
+CLASS_NAMES = [s.strip() for s in labels_str.split(",") if s.strip()]
+thresh = st.sidebar.slider("Umbral de 'Indeterminado'", 0.0, 1.0, 0.50, 0.01)
+# 
+
+
 # -----------------------------------------------------------------------------
 # UI — contenido principal
 # -----------------------------------------------------------------------------
@@ -289,11 +301,20 @@ else:
                 y = tf.nn.softmax(y, axis=-1).numpy()
             probs = y[0]
             topk = np.argsort(-probs)[:5]
-            st.write("Top-K (índices):", [int(i) for i in topk])
+            st.write("Top-K:")
             for i in topk:
                 p = float(probs[i])
-                st.write(f"Clase {int(i)} → {p:.3f}")
+                nombre = CLASS_NAMES[i] if i < len(CLASS_NAMES) else f"Clase {int(i)}"
+                if p < thresh:
+                    nombre = f"{nombre} (indeterminado)"
+                st.write(f"{nombre} → {p:.3f}")
                 st.progress(min(max(p, 0.0), 1.0))
+
+            pred = int(np.argmax(probs))
+            pred_name = CLASS_NAMES[pred] if pred < len(CLASS_NAMES) else f"Clase {pred}"
+            st.caption(f"Predicción principal: {pred_name} (p={probs[pred]:.3f})")
+              
+
 
 # Mensajes informativos del evento actual
 if model_loaded_now and fi:
