@@ -232,7 +232,7 @@ col1, col2 = st.columns([1, 2])
 
 with col1:
     up_img = st.file_uploader(
-        "Sube una imagen de un leucocito, aproximadamente cuadrada, de buena resolución y preferiblemente escaneada, de un frotis." ,
+        "Sube la imagen de un leucocito, aproximadamente cuadrada, de buena resolución y preferiblemente escaneada de un frotis." ,
         type=["png", "jpg", "jpeg"],
         key="test_image_uploader",
     )
