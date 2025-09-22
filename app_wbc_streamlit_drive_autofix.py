@@ -181,7 +181,7 @@ else:
 # ======================================================================
 # CARGA MODELO
 # ======================================================================
-st.header("Clasificador de leucocitos — https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.0/modelo_final.keras")
+st.header("Clasificador de leucocitos") # https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.0/modelo_final.keras")
 
 # Para Dx
 # with st.expander("Diagnóstico del modelo (primeras capas)"):
@@ -227,7 +227,7 @@ except Exception:
 # ======================================================================
 # PRUEBA RÁPIDA
 # ======================================================================
-st.subheader("Prueba rápida (opcional)")
+st.subheader("Prueba")
 col1, col2 = st.columns([1, 2])
 
 with col1:
