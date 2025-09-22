@@ -181,16 +181,16 @@ else:
 # ======================================================================
 # CARGA MODELO
 # ======================================================================
-st.header("Clasificador de leucocitos — modelo en prueba")
+st.header("Clasificador de leucocitos — https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.0/modelo_final.keras")
 
 # Para Dx
-with st.expander("Diagnóstico del modelo (primeras capas)"):
-    try:
-        st.write(model.layers[:5])
-        cfg = [ (l.name, getattr(l, "mean", None), getattr(l, "stddev", None)) for l in model.layers[:3] ]
-        st.code("\n".join([str(c) for c in cfg]))
-    except Exception as e:
-        st.write(f"No se pudo inspeccionar: {e}")
+# with st.expander("Diagnóstico del modelo (primeras capas)"):
+#    try:
+#        st.write(model.layers[:5])
+#        cfg = [ (l.name, getattr(l, "mean", None), getattr(l, "stddev", None)) for l in model.layers[:3] ]
+#        st.code("\n".join([str(c) for c in cfg]))
+#    except Exception as e:
+#        st.write(f"No se pudo inspeccionar: {e}")
 
 
 banner = st.empty()
