@@ -153,7 +153,7 @@ if labels_path.exists():
                     st.cache_data.clear()
                     st.rerun()
 
-labels_str_default = "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo"
+labels_str_default = "Basófilo","Eosinófilo","Eritroblasto","Granulocito inmaduro","Linfocito","Monocito","Neutrófilo","Plaqueta"  # "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo" 
 labels_str = st.sidebar.text_input(
     "Etiquetas de clases (orden del modelo)",
     ",".join(labels_from_json) if (labels_from_json and use_labels_json) else labels_str_default,
