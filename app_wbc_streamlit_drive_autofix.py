@@ -141,17 +141,17 @@ labels_path = Path(__file__).with_name(LABELS_JSON_FILENAME)
 if labels_path.exists():
     mtime = labels_path.stat().st_mtime
     labels_from_json = read_labels_json(str(labels_path), mtime)
-    if labels_from_json:
-        with st.sidebar.expander("Etiquetas desde labels.json", expanded=True):
-            st.caption(f"Se detectó {LABELS_JSON_FILENAME} en el repo.")
-            st.code(json.dumps(labels_from_json, ensure_ascii=False, indent=2))
-            cols = st.columns([1,1])
-            with cols[0]:
-                use_labels_json = st.checkbox("Usar etiquetas de labels.json", value=True, key="use_labels_json")
-            with cols[1]:
-                if st.button("Recargar etiquetas", key="reload_labels"):
-                    st.cache_data.clear()
-                    st.rerun()
+    # if labels_from_json:
+      #  with st.sidebar.expander("Etiquetas desde labels.json", expanded=True):
+      #      st.caption(f"Se detectó {LABELS_JSON_FILENAME} en el repo.")
+      #      st.code(json.dumps(labels_from_json, ensure_ascii=False, indent=2))
+      #      cols = st.columns([1,1])
+      #      with cols[0]:
+      #          use_labels_json = st.checkbox("Usar etiquetas de labels.json", value=True, key="use_labels_json")
+      #      with cols[1]:
+      #          if st.button("Recargar etiquetas", key="reload_labels"):
+      #              st.cache_data.clear()
+      #              st.rerun()
 
 labels_str_default = "Basófilo","Eosinófilo","Eritroblasto","Granulocito inmaduro","Linfocito","Monocito","Neutrófilo","Plaqueta"  # "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo" 
 labels_str = st.sidebar.text_input(
