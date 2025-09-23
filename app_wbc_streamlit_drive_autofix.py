@@ -17,7 +17,6 @@ st.set_page_config(page_title="Clasificador de leucocitos — modelo en prueba",
 
 from tensorflow.keras.applications.vgg16 import preprocess_input as vgg16_preprocess
 
-
 # ======================================================================
 # CONFIGURACIÓN
 # ======================================================================
@@ -141,19 +140,8 @@ labels_path = Path(__file__).with_name(LABELS_JSON_FILENAME)
 if labels_path.exists():
     mtime = labels_path.stat().st_mtime
     labels_from_json = read_labels_json(str(labels_path), mtime)
-    # if labels_from_json:
-      #  with st.sidebar.expander("Etiquetas desde labels.json", expanded=True):
-      #      st.caption(f"Se detectó {LABELS_JSON_FILENAME} en el repo.")
-      #      st.code(json.dumps(labels_from_json, ensure_ascii=False, indent=2))
-      #      cols = st.columns([1,1])
-      #      with cols[0]:
-      #          use_labels_json = st.checkbox("Usar etiquetas de labels.json", value=True, key="use_labels_json")
-      #      with cols[1]:
-      #          if st.button("Recargar etiquetas", key="reload_labels"):
-      #              st.cache_data.clear()
-      #              st.rerun()
-
-labels_str_default = "Basófilo","Eosinófilo","Eritroblasto","Granulocito inmaduro","Linfocito","Monocito","Neutrófilo","Plaqueta"  # "Neutrófilo,Linfocito,Monocito,Eosinófilo,Basófilo" 
+    
+labels_str_default = "Basófilo","Eosinófilo","Eritroblasto","Granulocito inmaduro","Linfocito","Monocito","Neutrófilo","Plaqueta"  
 labels_str = st.sidebar.text_input(
     "Etiquetas de clases (orden del modelo)",
     ",".join(labels_from_json) if (labels_from_json and use_labels_json) else labels_str_default,
@@ -182,16 +170,6 @@ else:
 # CARGA MODELO
 # ======================================================================
 st.header("Clasificador de leucocitos") # https://github.com/Spor195/wbc-streamlit2/releases/download/v1.0.0/modelo_final.keras")
-
-# Para Dx
-# with st.expander("Diagnóstico del modelo (primeras capas)"):
-#    try:
-#        st.write(model.layers[:5])
-#        cfg = [ (l.name, getattr(l, "mean", None), getattr(l, "stddev", None)) for l in model.layers[:3] ]
-#        st.code("\n".join([str(c) for c in cfg]))
-#    except Exception as e:
-#        st.write(f"No se pudo inspeccionar: {e}")
-
 
 banner = st.empty()
 model = None
@@ -225,7 +203,7 @@ except Exception:
     pass
 
 # ======================================================================
-# PRUEBA RÁPIDA
+# PRUEBA 
 # ======================================================================
 st.subheader("Prueba")
 col1, col2 = st.columns([1, 2])
@@ -242,10 +220,6 @@ with col2:
         rgb = load_rgb_from_upload(up_img)
         st.image(rgb, caption="Entrada (RGB, 224x224)", width=256)
 
-        # x = preprocess_rescale(rgb)
-        # y = model(x, training=False).numpy()
-
-        # x = preprocess_rescale(rgb)  
         x = preprocess_tensor_vgg16(rgb)
         y = model(x, training=False).numpy()
 
